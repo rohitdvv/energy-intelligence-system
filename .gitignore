@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+venv/
+__pycache__/
+*.pyc
+
+# Environment variables — never commit your keys
+.env
+.env.local
+.env.*.local
+
+# Build outputs
+dist/
+build/
+out/
+.next/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Python extras
+.venv/
+*.py[cod]
+
+# Data — keep .gitkeep files tracked, ignore generated parquet
+data/raw/*.parquet
+data/processed/*.parquet
+data/forecasts/*.parquet
