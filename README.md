@@ -1,6 +1,6 @@
 [![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/vvE-nkdH)
 # CDF Energy AI Hackathon
-**Live URL:** <!-- Add your deployment URL here before submission e.g. https://your-app.vercel.app -->
+**Live URL:** https://energy-intelligence.streamlit.app/
 
 Welcome! This is your personal repository for the CDF Energy AI Hackathon. The problem statement is included in this repo — read it carefully before you start.
 
