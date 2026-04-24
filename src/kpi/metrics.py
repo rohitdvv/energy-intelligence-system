@@ -13,12 +13,15 @@ KPI definitions (Tier 1 required + Tier 2 extras):
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from models.forecaster import ForecastResult
+
+logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------------
@@ -87,6 +90,12 @@ def production_growth_rate(df: pd.DataFrame, year: int) -> dict[str, Any]:
     prior = annual.loc[compare_year - 1]
     pct = ((curr - prior) / prior * 100) if prior != 0 else None
 
+    logger.info(
+        "growth_rate: requested_year=%d latest_full=%d compare_year=%d "
+        "prior=%.1f yoy_pct=%s",
+        year, full_year, compare_year, float(prior),
+        f"{pct:.2f}" if pct is not None else "None",
+    )
     return {
         "year": compare_year,
         "yoy_pct": round(float(pct), 2) if pct is not None else None,
@@ -260,7 +269,7 @@ def basin_kpi_summary(
 
 def _annual_totals(df: pd.DataFrame) -> pd.Series:
     """Sum monthly 'y' values by year, returning a Series indexed by year."""
-    tmp = df.copy()
+    tmp = df.dropna(subset=["y"]).copy()
     tmp["year"] = pd.to_datetime(tmp["ds"]).dt.year
     return tmp.groupby("year")["y"].sum()
 
@@ -274,10 +283,13 @@ def _latest_full_year(df: pd.DataFrame) -> int:
     """
     tmp = df.copy()
     tmp["year"] = pd.to_datetime(tmp["ds"]).dt.year
-    counts = tmp.groupby("year")["ds"].count()
+    # Drop NaN y rows — Prophet pads the current partial year with NaN y_actual,
+    # which would make 2026 appear to have 12 months when it has only 1 real row.
+    tmp_valid = tmp.dropna(subset=["y"])
+    counts = tmp_valid.groupby("year")["ds"].nunique()
     full = counts[counts >= 12]
     if full.empty:
-        return int(counts.index.max())
+        return int(counts.index.max()) if not counts.empty else int(tmp["year"].max())
     return int(full.index.max())
 
 

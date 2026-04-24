@@ -90,11 +90,17 @@ def render_overview(basin: str, fuel_type: str, target_year: int, wti: float) ->
         )
 
         yoy = gr.get("yoy_pct")
+        yoy_year = gr.get("year")
+        yoy_help = (
+            f"Year-over-year % change: {yoy_year} vs {yoy_year - 1}"
+            if yoy_year is not None
+            else "Year-over-year % change in annual production"
+        )
         c2.metric(
             "YoY Growth",
             f"{yoy:+.1f}%" if yoy is not None else "N/A",
             delta=f"{yoy:.1f}%" if yoy is not None else None,
-            help="Year-over-year % change in annual production",
+            help=yoy_help,
         )
 
         cv = vol.get("cv_pct")
@@ -138,7 +144,17 @@ def render_overview(basin: str, fuel_type: str, target_year: int, wti: float) ->
 
     ranked: list[dict[str, Any]] = [b for b in cmp.get("ranked_basins", []) if "error" not in b]
     if not ranked:
-        st.info("No basin data available yet.")
+        all_basins = cmp.get("ranked_basins", [])
+        errored = [b for b in all_basins if "error" in b]
+        if errored:
+            err_df = pd.DataFrame([
+                {"Basin": b["basin"], "Error": b.get("error", "unknown")}
+                for b in errored
+            ])
+            st.warning("All 7 basins failed to compute. Details below:", icon="⚠️")
+            st.dataframe(err_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("No basin data available yet.")
         return
 
     rows = []

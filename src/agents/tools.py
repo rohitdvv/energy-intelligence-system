@@ -9,6 +9,7 @@ Exports:
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import numpy as np
@@ -189,7 +190,14 @@ def _exec_compare_basins(inp: dict[str, Any]) -> dict[str, Any]:
             continue
         cutoff_year = int(bdf["ds"].dt.year.max())
         try:
+            _t0 = time.monotonic()
             result = _fit_and_forecast(bdf, cutoff_year, target_year, basin=basin, fuel_type=fuel_type)
+            _elapsed = time.monotonic() - _t0
+            if _elapsed > 10:
+                logger.warning(
+                    "compare_basins: basin=%s Prophet fit took %.1fs (>10s threshold)",
+                    basin, _elapsed,
+                )
             summaries.append(basin_kpi_summary(result, target_year, wti_price=wti))
         except Exception as exc:
             logger.warning("compare_basins: basin=%s failed: %r", basin, exc)
