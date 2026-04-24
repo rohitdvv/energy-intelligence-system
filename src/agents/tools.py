@@ -48,7 +48,7 @@ _BASIN_ENUM = BASINS  # ["Permian", "Bakken", ..., "Appalachian"]
 
 def _load_basin(fuel_type: str, basin: str) -> pd.DataFrame:
     """Return ds/y DataFrame for *basin*, empty if unavailable."""
-    df = load_production_no_cache(fuel_type=fuel_type)
+    df = load_production_no_cache(fuel_type=fuel_type, live_fetch=True)
     return df[df["basin"] == basin][["ds", "y"]].dropna().copy()
 
 
@@ -174,7 +174,7 @@ def _exec_compare_basins(inp: dict[str, Any]) -> dict[str, Any]:
     target_year = int(inp["target_year"])
     wti = float(inp.get("wti_assumption", 75.0))
 
-    df = load_production_no_cache(fuel_type=fuel_type)
+    df = load_production_no_cache(fuel_type=fuel_type, live_fetch=True)
 
     summaries: list[dict[str, Any]] = []
     for basin in _BASIN_ENUM:

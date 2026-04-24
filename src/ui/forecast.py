@@ -48,7 +48,7 @@ def _cached_forecast(
     basin: str, fuel_type: str, cutoff_year: int, horizon_year: int
 ) -> pd.DataFrame | None:
     """Return result.df as a plain DataFrame (Prophet model excluded for cache safety)."""
-    df = load_production_no_cache(fuel_type=fuel_type)
+    df = load_production_no_cache(fuel_type=fuel_type, live_fetch=True)
     bdf = df[df["basin"] == basin][["ds", "y"]].dropna().copy()
     if bdf.empty:
         return None

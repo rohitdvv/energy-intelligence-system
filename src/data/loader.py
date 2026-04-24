@@ -52,7 +52,7 @@ def _fetch_and_save(fetcher: Callable[[], pd.DataFrame], path: Path) -> pd.DataF
 
 def load_production_no_cache(
     fuel_type: str = "oil",
-    live_fetch: bool = False,
+    live_fetch: bool = True,
 ) -> pd.DataFrame:
     """Load all-basin production for *fuel_type* ('oil' or 'gas').
 
@@ -90,8 +90,7 @@ def load_production_no_cache(
 
     if not frames:
         logger.warning(
-            "No %s production data found in %s. Run fetch_all.py first.",
-            fuel_type, _RAW_DIR,
+            "No %s production data available after live-fetch attempt.", fuel_type
         )
         return _EMPTY.copy()
 
@@ -100,7 +99,7 @@ def load_production_no_cache(
     return combined.sort_values(["basin", "ds"]).reset_index(drop=True)
 
 
-def load_wti_no_cache(live_fetch: bool = False) -> pd.DataFrame:
+def load_wti_no_cache(live_fetch: bool = True) -> pd.DataFrame:
     """Load WTI monthly price series.
 
     Falls back to a live FRED fetch if the parquet is missing and
@@ -117,7 +116,7 @@ def load_wti_no_cache(live_fetch: bool = False) -> pd.DataFrame:
             logger.warning("FRED live fetch failed: %s", exc)
 
     if df is None or df.empty:
-        logger.warning("No WTI price data. Run fetch_all.py or enable live_fetch.")
+        logger.warning("No WTI price data available after live-fetch attempt.")
         return _EMPTY.copy()
 
     df = df.copy()
@@ -135,12 +134,12 @@ def _make_cached() -> tuple[Callable, Callable]:
         import streamlit as st
 
         @st.cache_data(ttl=3600, show_spinner="Loading production data…")
-        def load_production(fuel_type: str = "oil", live_fetch: bool = False) -> pd.DataFrame:
+        def load_production(fuel_type: str = "oil", live_fetch: bool = True) -> pd.DataFrame:
             """Cached: load all-basin production data."""
             return load_production_no_cache(fuel_type=fuel_type, live_fetch=live_fetch)
 
         @st.cache_data(ttl=3600, show_spinner="Loading WTI prices…")
-        def load_wti(live_fetch: bool = False) -> pd.DataFrame:
+        def load_wti(live_fetch: bool = True) -> pd.DataFrame:
             """Cached: load WTI monthly price series."""
             return load_wti_no_cache(live_fetch=live_fetch)
 

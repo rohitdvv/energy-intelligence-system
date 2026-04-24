@@ -21,7 +21,7 @@ from models.forecaster import forecast_basin as _fit
 def _kpi_for_basin(
     basin: str, fuel_type: str, target_year: int, wti: float
 ) -> dict[str, Any] | None:
-    df = load_production_no_cache(fuel_type=fuel_type)
+    df = load_production_no_cache(fuel_type=fuel_type, live_fetch=True)
     bdf = df[df["basin"] == basin][["ds", "y"]].dropna().copy()
     if bdf.empty:
         return None
@@ -58,6 +58,14 @@ def _fmt(val: float | None, prefix: str = "", suffix: str = "") -> str:
 
 def render_overview(basin: str, fuel_type: str, target_year: int, wti: float) -> None:
     """Render the Overview tab."""
+
+    # First-load notice — shown once per session when no local parquet files exist
+    if not st.session_state.get("_eis_fetch_banner_shown"):
+        st.session_state["_eis_fetch_banner_shown"] = True
+        from pathlib import Path
+        _raw = Path(__file__).resolve().parents[2] / "data" / "raw"
+        if not any(_raw.glob("*.parquet")):
+            st.info("⏳ First-time data fetch from EIA/FRED — this takes about a minute.")
 
     # --- KPI cards ---
     with st.spinner("Loading KPIs…"):
