@@ -9,3 +9,4 @@ anthropic==0.40.0
 requests==2.32.3
 python-dotenv==1.0.1
 duckdb==0.10.3
+cmdstanpy<1.2.0
