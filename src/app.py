@@ -1,31 +1,74 @@
 """Energy Intelligence System — CDF Energy AI Hackathon.
 
-A decision-support tool for U.S. oil & gas investment analysis powered
-by real EIA/FRED data, Prophet forecasting, and a multi-agent Claude AI
-committee that surfaces regional production KPIs and investment memos.
+A decision-support tool for U.S. oil & gas investment analysis powered by real
+EIA / FRED data, Prophet forecasting, and a multi-agent Claude AI committee that
+surfaces regional production KPIs and investment-grade deal memos.
 """
 from __future__ import annotations
 
+import anthropic
 import streamlit as st
 
-from config import check_secrets
+from config import check_secrets, get_anthropic_key
+from data.eia import BASINS
+from ui.committee import render_committee
+from ui.forecast import render_forecast
+from ui.memo import render_memo
+from ui.overview import render_overview
 
 
-def render_overview() -> None:
-    st.info("Coming soon — Overview")
+# ------------------------------------------------------------------
+# Shared resources (initialised once per Streamlit process)
+# ------------------------------------------------------------------
+
+@st.cache_resource
+def _anthropic_client() -> anthropic.Anthropic:
+    """Single Anthropic client reused across all agent calls."""
+    return anthropic.Anthropic(api_key=get_anthropic_key())
 
 
-def render_forecast() -> None:
-    st.info("Coming soon — Forecast")
+# ------------------------------------------------------------------
+# Sidebar
+# ------------------------------------------------------------------
+
+def _sidebar() -> tuple[str, str, int, float]:
+    with st.sidebar:
+        st.markdown("## ⚡ Energy Intelligence")
+        st.markdown("*U.S. Oil & Gas Investment Analysis*")
+        st.divider()
+
+        basin: str = st.selectbox("Basin", BASINS, index=0)
+        fuel_type: str = st.radio("Fuel type", ["oil", "gas"], horizontal=True)
+        target_year: int = st.slider("Target year", 2015, 2030, 2028)
+        wti: float = st.number_input(
+            "WTI assumption ($/bbl)",
+            min_value=40.0,
+            max_value=150.0,
+            value=75.0,
+            step=1.0,
+        )
+
+        st.divider()
+        if st.button(
+            "🔄 Refresh data",
+            use_container_width=True,
+            help="Clears all @st.cache_data results and reruns the app.",
+        ):
+            st.cache_data.clear()
+            st.rerun()
+
+        st.caption(
+            "Data: EIA Open Data API · FRED  \n"
+            "Forecast: Facebook Prophet  \n"
+            "AI: Anthropic Claude"
+        )
+
+    return basin, fuel_type, target_year, wti
 
 
-def render_committee() -> None:
-    st.info("Coming soon — Committee")
-
-
-def render_memo() -> None:
-    st.info("Coming soon — Memo")
-
+# ------------------------------------------------------------------
+# Main
+# ------------------------------------------------------------------
 
 def main() -> None:
     st.set_page_config(
@@ -34,26 +77,32 @@ def main() -> None:
         layout="wide",
     )
 
-    st.title("Energy Intelligence System")
-    st.caption("U.S. Oil & Gas Investment Analysis · CDF Energy AI Hackathon")
-
     check_secrets()
 
-    tab_overview, tab_forecast, tab_committee, tab_memo = st.tabs(
-        ["Overview", "Forecast", "Committee", "Memo"]
+    basin, fuel_type, target_year, wti = _sidebar()
+    client = _anthropic_client()
+
+    st.title("Energy Intelligence System")
+    st.caption(
+        f"**{basin}** · {fuel_type.upper()} · "
+        f"Target year **{target_year}** · WTI **${wti:.0f}/bbl**"
     )
 
-    with tab_overview:
-        render_overview()
+    tab_ov, tab_fc, tab_co, tab_me = st.tabs(
+        ["📊 Overview", "📈 Forecast", "🏛️ Committee", "📄 Memo"]
+    )
 
-    with tab_forecast:
-        render_forecast()
+    with tab_ov:
+        render_overview(basin, fuel_type, target_year, wti)
 
-    with tab_committee:
-        render_committee()
+    with tab_fc:
+        render_forecast(basin, fuel_type, target_year, wti)
 
-    with tab_memo:
-        render_memo()
+    with tab_co:
+        render_committee(basin, fuel_type, target_year, wti, client)
+
+    with tab_me:
+        render_memo(basin, fuel_type, target_year)
 
 
 if __name__ == "__main__":
