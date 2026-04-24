@@ -129,6 +129,8 @@ class EIAClient:
         ]
         for area in areas:
             params.append(("facets[duoarea][]", area))
+        if "natural-gas" in route:
+            params.append(("facets[process][]", "VGM"))
 
         payload = self._get(route, params)
         rows: list[dict[str, Any]] = payload.get("response", {}).get("data", [])
@@ -146,6 +148,18 @@ class EIAClient:
 
         # Sum across multiple states → single basin-level series
         df = df.groupby("ds", as_index=False)["y"].sum()
+
+        # Drop last month if it looks like a partial/incomplete EIA report
+        if len(df) >= 7:
+            last_val = df["y"].iloc[-1]
+            recent_avg = df["y"].iloc[-7:-1].mean()
+            if recent_avg > 0 and last_val < 0.5 * recent_avg:
+                logger.warning(
+                    "Dropping partial month %s: value=%.0f vs recent avg=%.0f",
+                    df["ds"].iloc[-1].strftime("%Y-%m"), last_val, recent_avg,
+                )
+                df = df.iloc[:-1]
+
         df["basin"] = basin_name
         df["fuel_type"] = fuel_type
 

@@ -41,12 +41,21 @@ def _read_parquet(path: Path) -> pd.DataFrame | None:
 
 
 def _fetch_and_save(fetcher: Callable[[], pd.DataFrame], path: Path) -> pd.DataFrame:
-    """Call *fetcher*, save result to *path*, return DataFrame."""
+    """Call *fetcher*, save result to *path*, return DataFrame.
+
+    Parquet write is best-effort: a failure (e.g. read-only filesystem on
+    Streamlit Cloud) is logged but does NOT suppress the returned DataFrame.
+    """
     df = fetcher()
     if not df.empty:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(path, index=False)
-        logger.info("Live-fetched and cached → %s (%d rows)", path.name, len(df))
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            df.to_parquet(path, index=False)
+            logger.info("Live-fetched and cached → %s (%d rows)", path.name, len(df))
+        except Exception as exc:
+            logger.warning(
+                "Could not save parquet (read-only FS?) — %s: %s", path.name, exc
+            )
     return df
 
 
@@ -73,11 +82,10 @@ def load_production_no_cache(
             logger.info("Parquet not found — live-fetching %s %s", fuel_type, basin)
             if eia is None:
                 eia = EIAClient()
-            fetcher = (
-                lambda b=basin: eia.fetch_oil_production_by_basin(b)  # type: ignore[union-attr]
-                if fuel_type == "oil"
-                else lambda b=basin: eia.fetch_gas_production_by_basin(b)  # type: ignore[union-attr]
-            )
+            if fuel_type == "oil":
+                fetcher = lambda b=basin: eia.fetch_oil_production_by_basin(b)  # type: ignore[union-attr]
+            else:
+                fetcher = lambda b=basin: eia.fetch_gas_production_by_basin(b)  # type: ignore[union-attr]
             try:
                 df = _fetch_and_save(fetcher, path)
             except Exception as exc:
@@ -96,6 +104,11 @@ def load_production_no_cache(
 
     combined = pd.concat(frames, ignore_index=True)
     combined["ds"] = pd.to_datetime(combined["ds"])
+    present = sorted(combined["basin"].unique().tolist())
+    logger.info(
+        "load_production_no_cache: fuel_type=%s rows=%d basins=%s",
+        fuel_type, len(combined), present,
+    )
     return combined.sort_values(["basin", "ds"]).reset_index(drop=True)
 
 
