@@ -70,17 +70,25 @@ def production_growth_rate(df: pd.DataFrame, year: int) -> dict[str, Any]:
 
     Formula: (year_total - prior_year_total) / prior_year_total × 100.
     Requires at least 2 years of data.
+
+    If *year* is a partial calendar year (< 12 months of data) or exceeds the
+    latest full year in the series, the comparison is shifted to the two most
+    recent full years to avoid partial-year distortion (e.g. -91% for a basin
+    where 2026 has only 3 months vs 2025's full 12).
     """
     annual = _annual_totals(df)
-    if year not in annual.index or (year - 1) not in annual.index:
-        return {"year": year, "yoy_pct": None, "year_total": None, "prior_total": None}
+    full_year = _latest_full_year(df)
+    compare_year = year if year <= full_year else full_year
 
-    curr = annual.loc[year]
-    prior = annual.loc[year - 1]
+    if compare_year not in annual.index or (compare_year - 1) not in annual.index:
+        return {"year": compare_year, "yoy_pct": None, "year_total": None, "prior_total": None}
+
+    curr = annual.loc[compare_year]
+    prior = annual.loc[compare_year - 1]
     pct = ((curr - prior) / prior * 100) if prior != 0 else None
 
     return {
-        "year": year,
+        "year": compare_year,
         "yoy_pct": round(float(pct), 2) if pct is not None else None,
         "year_total": round(float(curr), 2),
         "prior_total": round(float(prior), 2),
@@ -92,8 +100,14 @@ def production_decline_rate(df: pd.DataFrame, n_years: int = 3) -> dict[str, Any
 
     Positive result = growth; negative = decline.
     Uses the last *n_years* of data so it reflects recent trajectory.
+    Partial years (< 12 months) are excluded before the window is applied.
     """
     annual = _annual_totals(df)
+    if len(annual) < 2:
+        return {"cagr_pct": None, "peak_year": None, "latest_year": None, "n_years": n_years}
+
+    full_year = _latest_full_year(df)
+    annual = annual[annual.index <= full_year]
     if len(annual) < 2:
         return {"cagr_pct": None, "peak_year": None, "latest_year": None, "n_years": n_years}
 
@@ -249,6 +263,22 @@ def _annual_totals(df: pd.DataFrame) -> pd.Series:
     tmp = df.copy()
     tmp["year"] = pd.to_datetime(tmp["ds"]).dt.year
     return tmp.groupby("year")["y"].sum()
+
+
+def _latest_full_year(df: pd.DataFrame) -> int:
+    """Return the most recent calendar year with >= 12 months of data.
+
+    Protects growth-rate and CAGR calculations from partial-year distortion
+    (e.g. EIA data for an in-progress year like 2026 with only 3 months).
+    Falls back to the highest year present if none have 12 months.
+    """
+    tmp = df.copy()
+    tmp["year"] = pd.to_datetime(tmp["ds"]).dt.year
+    counts = tmp.groupby("year")["ds"].count()
+    full = counts[counts >= 12]
+    if full.empty:
+        return int(counts.index.max())
+    return int(full.index.max())
 
 
 def _unit(fuel_type: str) -> str:

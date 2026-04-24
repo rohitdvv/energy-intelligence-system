@@ -175,6 +175,11 @@ def _exec_compare_basins(inp: dict[str, Any]) -> dict[str, Any]:
     wti = float(inp.get("wti_assumption", 75.0))
 
     df = load_production_no_cache(fuel_type=fuel_type, live_fetch=True)
+    basins_found = sorted(df["basin"].unique().tolist()) if not df.empty else []
+    logger.info(
+        "compare_basins: fuel=%s target_year=%d df_rows=%d basins_found=%s",
+        fuel_type, target_year, len(df), basins_found,
+    )
 
     summaries: list[dict[str, Any]] = []
     for basin in _BASIN_ENUM:
@@ -187,6 +192,7 @@ def _exec_compare_basins(inp: dict[str, Any]) -> dict[str, Any]:
             result = _fit_and_forecast(bdf, cutoff_year, target_year, basin=basin, fuel_type=fuel_type)
             summaries.append(basin_kpi_summary(result, target_year, wti_price=wti))
         except Exception as exc:
+            logger.warning("compare_basins: basin=%s failed: %r", basin, exc)
             summaries.append({"basin": basin, "error": str(exc)})
 
     basin_totals: dict[str, float] = {
@@ -201,6 +207,13 @@ def _exec_compare_basins(inp: dict[str, Any]) -> dict[str, Any]:
     summaries.sort(
         key=lambda s: s.get("projected_production", {}).get("value") or 0,
         reverse=True,
+    )
+    n_ok = sum(1 for s in summaries if "error" not in s)
+    n_fail = len(summaries) - n_ok
+    n_rpi = sum(1 for s in summaries if s.get("relative_performance_index") is not None)
+    logger.info(
+        "compare_basins done: %d succeeded, %d failed, %d have RPI",
+        n_ok, n_fail, n_rpi,
     )
     return {
         "fuel_type": fuel_type,

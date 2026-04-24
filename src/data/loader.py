@@ -70,6 +70,15 @@ def load_production_no_cache(
 
     Returns a DataFrame with columns: ds, y, basin, fuel_type.
     """
+    existing = sum(
+        1 for b in BASINS
+        if (_RAW_DIR / f"eia_{fuel_type}_{_basin_slug(b)}.parquet").exists()
+    )
+    logger.info(
+        "load_production_no_cache called: fuel_type=%s live_fetch=%s parquet_on_disk=%d/%d",
+        fuel_type, live_fetch, existing, len(BASINS),
+    )
+
     frames: list[pd.DataFrame] = []
     eia: EIAClient | None = None
 
