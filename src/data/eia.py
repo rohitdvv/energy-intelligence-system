@@ -117,8 +117,14 @@ class EIAClient:
         areas: list[str],
         basin_name: str,
         fuel_type: str,
+        process_code: str,
     ) -> pd.DataFrame:
-        """Fetch, normalise, and aggregate production rows into a basin DataFrame."""
+        """Fetch, normalise, and aggregate production rows into a basin DataFrame.
+
+        *process_code* filters to a single EIA process type so the groupby sum
+        across states is not inflated by the ~11 process codes the API returns
+        per state per month (e.g. gross withdrawal, marketed, vented, flared…).
+        """
         params: list[tuple[str, str]] = [
             ("frequency", "monthly"),
             ("data[0]", "value"),
@@ -129,8 +135,7 @@ class EIAClient:
         ]
         for area in areas:
             params.append(("facets[duoarea][]", area))
-        if "natural-gas" in route:
-            params.append(("facets[process][]", "VGM"))
+        params.append(("facets[process][]", process_code))
 
         payload = self._get(route, params)
         rows: list[dict[str, Any]] = payload.get("response", {}).get("data", [])
@@ -183,7 +188,8 @@ class EIAClient:
         if areas is None:
             raise ValueError(f"Unknown basin {basin_name!r}. Valid: {BASINS}")
         return self._fetch_production(
-            "petroleum/crd/crpdn/data", areas, basin_name, "oil"
+            "petroleum/crd/crpdn/data", areas, basin_name, "oil",
+            process_code="FPF",
         )
 
     def fetch_gas_production_by_basin(self, basin_name: str) -> pd.DataFrame:
@@ -196,7 +202,8 @@ class EIAClient:
         if areas is None:
             raise ValueError(f"Unknown basin {basin_name!r}. Valid: {BASINS}")
         return self._fetch_production(
-            "natural-gas/prod/sum/data", areas, basin_name, "gas"
+            "natural-gas/prod/sum/data", areas, basin_name, "gas",
+            process_code="VGM",
         )
 
     def fetch_wti_spot_price(self) -> pd.DataFrame:
