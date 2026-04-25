@@ -61,6 +61,20 @@ def _cached_anomalies(basin: str, fuel_type: str) -> dict[str, Any]:
     return execute_tool("investigate_anomalies", {"basin": basin, "fuel_type": fuel_type})
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_backtest(basin: str, fuel_type: str) -> dict[str, Any] | None:
+    from data.loader import load_production_no_cache
+    from models.backtest import backtest_mape
+    df = load_production_no_cache(fuel_type=fuel_type, live_fetch=True)
+    bdf = df[df["basin"] == basin][["ds", "y"]].dropna().copy()
+    if len(bdf) < 24:
+        return None
+    try:
+        return backtest_mape(bdf, basin, fuel_type)
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
 # ------------------------------------------------------------------
 # Chart builder
 # ------------------------------------------------------------------
@@ -223,3 +237,28 @@ def render_forecast(basin: str, fuel_type: str, target_year: int, _wti: float) -
 
     with st.expander("📖 Forecast methodology"):
         st.markdown(_METHODOLOGY)
+
+        st.markdown("---")
+        st.markdown("**Backtest reliability** (12-month held-out MAPE):")
+        with st.spinner("Running backtest…"):
+            bt = _cached_backtest(basin, fuel_type)
+        if bt is None:
+            st.caption("Insufficient data for backtest (< 24 months).")
+        elif "error" in bt:
+            st.caption(f"Backtest unavailable: {bt['error']}")
+        else:
+            mape = bt["mape_pct"]
+            quality = (
+                "EXCELLENT" if mape < 5 else
+                "GOOD"      if mape < 10 else
+                "OK"        if mape < 20 else
+                "POOR"
+            )
+            st.metric(
+                f"{basin} {fuel_type.upper()} MAPE",
+                f"{mape:.1f}%",
+                help=(
+                    f"{quality} — mean absolute % error on {bt['n_predictions']} "
+                    f"held-out months ({bt['test_start']} → {bt['test_end']})"
+                ),
+            )
