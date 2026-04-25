@@ -35,8 +35,12 @@ def _anthropic_client() -> anthropic.Anthropic:
 # ------------------------------------------------------------------
 
 def _sidebar() -> tuple[str, str, int, float]:
-    # Apply any pending basin selection written by the map tab
-    # (map click sets session state before sidebar renders on the next rerun)
+    # Apply any pending basin selection from the map tab.
+    # This must happen BEFORE the selectbox widget is instantiated so that
+    # Streamlit picks up the new value on this render pass.
+    if "_pending_basin" in st.session_state:
+        st.session_state["basin"] = st.session_state.pop("_pending_basin")
+
     with st.sidebar:
         st.markdown("## ⚡ Energy Intelligence")
         st.markdown("*U.S. Oil & Gas Investment Analysis*")

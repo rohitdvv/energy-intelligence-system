@@ -398,7 +398,8 @@ def render_map(
                 clicked = basin_names[idx]
 
         if clicked and clicked in BASINS and clicked != basin:
-            st.session_state["basin"] = clicked
+            # Cannot write a widget key mid-render; stage it for the next pass.
+            st.session_state["_pending_basin"] = clicked
             st.rerun()
 
     st.divider()
