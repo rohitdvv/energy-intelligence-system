@@ -11,8 +11,11 @@ import streamlit as st
 
 from config import check_secrets, get_anthropic_key
 from data.eia import BASINS
+from ui.chat import render_chat
 from ui.committee import render_committee
+from ui.economics import render_economics
 from ui.forecast import render_forecast
+from ui.map import render_map
 from ui.memo import render_memo
 from ui.overview import render_overview
 
@@ -32,12 +35,15 @@ def _anthropic_client() -> anthropic.Anthropic:
 # ------------------------------------------------------------------
 
 def _sidebar() -> tuple[str, str, int, float]:
+    # Apply any pending basin selection written by the map tab
+    # (map click sets session state before sidebar renders on the next rerun)
     with st.sidebar:
         st.markdown("## ⚡ Energy Intelligence")
         st.markdown("*U.S. Oil & Gas Investment Analysis*")
         st.divider()
 
-        basin: str = st.selectbox("Basin", BASINS, index=0)
+        # key="basin" lets the map tab update this widget via session_state
+        basin: str = st.selectbox("Basin", BASINS, key="basin")
         fuel_type: str = st.radio("Fuel type", ["oil", "gas"], horizontal=True)
         target_year: int = st.slider("Target year", 2015, 2030, 2028)
         wti: float = st.number_input(
@@ -88,8 +94,16 @@ def main() -> None:
         f"Target year **{target_year}** · WTI **${wti:.0f}/bbl**"
     )
 
-    tab_ov, tab_fc, tab_co, tab_me = st.tabs(
-        ["📊 Overview", "📈 Forecast", "🏛️ Committee", "📄 Memo"]
+    tab_ov, tab_fc, tab_map, tab_chat, tab_co, tab_me, tab_econ = st.tabs(
+        [
+            "📊 Overview",
+            "📈 Forecast",
+            "🗺️ Map",
+            "💬 Chat",
+            "🏛️ Committee",
+            "📄 Memo",
+            "💰 Economics",
+        ]
     )
 
     with tab_ov:
@@ -98,11 +112,20 @@ def main() -> None:
     with tab_fc:
         render_forecast(basin, fuel_type, target_year, wti)
 
+    with tab_map:
+        render_map(basin, fuel_type, target_year, wti)
+
+    with tab_chat:
+        render_chat(client)
+
     with tab_co:
         render_committee(basin, fuel_type, target_year, wti, client)
 
     with tab_me:
         render_memo(basin, fuel_type, target_year)
+
+    with tab_econ:
+        render_economics(basin, fuel_type, wti)
 
 
 if __name__ == "__main__":
