@@ -1,6 +1,6 @@
 # Walkthrough Guide
 
-**Video Link:** [Watch the 5-minute walkthrough on Loom](https://www.loom.com/share/3cac75a549194399a38bf6cccab1f61c)
+**Video Link:** [Watch the 5-minute walkthrough on Loom](https://www.loom.com/share/67ea0809cce0461cabd9a48dbe0e7b95)
 
 ---
 
