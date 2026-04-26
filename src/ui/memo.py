@@ -282,11 +282,14 @@ def render_memo(basin: str, fuel_type: str, target_year: int) -> None:
 
     if memo_md:
         pdf_key = f"pdf_{basin}_{fuel_type}_{target_year}"
+        pdf_err_key = f"pdf_err_{basin}_{fuel_type}_{target_year}"
         if pdf_key not in st.session_state and debate_result is not None:
             try:
                 st.session_state[pdf_key] = _generate_pdf_bytes(debate_result)
-            except Exception:
+                st.session_state.pop(pdf_err_key, None)
+            except Exception as exc:
                 st.session_state[pdf_key] = None
+                st.session_state[pdf_err_key] = str(exc)
 
         pdf_bytes = st.session_state.get(pdf_key)
         pdf_filename = (
@@ -302,6 +305,8 @@ def render_memo(basin: str, fuel_type: str, target_year: int) -> None:
                     mime="application/pdf",
                     use_container_width=True,
                 )
+            elif st.session_state.get(pdf_err_key):
+                st.warning(f"PDF error: {st.session_state[pdf_err_key]}", icon="⚠️")
             else:
                 st.caption("PDF unavailable — install `fpdf2`")
 
