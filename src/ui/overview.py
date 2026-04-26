@@ -13,6 +13,8 @@ import streamlit as st
 
 from agents.tools import execute_tool
 from data.loader import load_production_no_cache
+from data.usgs_loader import get_resource_assessment, resource_adequacy_years, all_assessments_df
+from data.bsee_loader import get_offshore_context
 from kpi.metrics import basin_kpi_summary
 from models.forecaster import forecast_basin as _fit
 
@@ -368,6 +370,76 @@ def _render_bubble(
     st.plotly_chart(fig, use_container_width=True)
 
 
+def _render_usgs_section(basin: str, fuel_type: str, kpi: dict | None) -> None:
+    """USGS resource adequacy panel."""
+    rec = get_resource_assessment(basin)
+    if rec is None:
+        return
+
+    st.markdown("##### USGS Resource Base")
+    st.caption(
+        f"Mean undiscovered technically recoverable resources (UTRR) — "
+        f"USGS National Oil & Gas Assessment, {rec['assessment_year']}. "
+        f"Source: {rec['report']}"
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Undiscovered Oil", f"{rec['oil_bbo']} BBO",
+              help="Billion barrels of oil — mean USGS estimate")
+    c2.metric("Undiscovered Gas", f"{rec['gas_tcfg']} TCFG",
+              help="Trillion cubic feet of gas — mean USGS estimate")
+    c3.metric("Undiscovered NGL", f"{rec['ngl_bbo']} BBO",
+              help="Natural gas liquids — mean USGS estimate")
+
+    # Resource adequacy: years of undiscovered resource at current production
+    if kpi:
+        ann_prod = (kpi.get("projected_production") or {}).get("value")
+        if ann_prod:
+            adequacy = resource_adequacy_years(basin, fuel_type, ann_prod * 12)
+            if adequacy:
+                label = "Oil Resource Adequacy" if fuel_type.lower() == "oil" else "Gas Resource Adequacy"
+                c4.metric(label, f"{adequacy:,} yrs",
+                          help="USGS UTRR ÷ current annual production rate — years of undiscovered upside")
+            else:
+                c4.metric("Resource Adequacy", "N/A")
+
+    st.caption(f"Notes: {rec['notes']}")
+
+    with st.expander("All basin USGS assessments"):
+        df_all = all_assessments_df()
+        st.dataframe(df_all, use_container_width=True, hide_index=True)
+
+
+def _render_bsee_section(target_year: int, fuel_type: str) -> None:
+    """BSEE offshore context panel."""
+    try:
+        ctx = get_offshore_context(min(target_year, 2024), fuel_type)
+    except Exception:
+        return
+
+    st.markdown("##### Federal Offshore Production Context")
+    st.caption(
+        "Bureau of Safety & Environmental Enforcement (BSEE) — "
+        "U.S. Outer Continental Shelf, Gulf of Mexico. "
+        "Not included in the EIA onshore basin figures above."
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("GOM Area", ctx["area"].replace(" (Federal OCS)", ""))
+    c2.metric("Annual Production", ctx["production"],
+              help="Gulf of Mexico federal offshore production")
+    c3.metric("Share of U.S. Total", ctx["us_share"],
+              help="Approximate share of total U.S. production")
+    c4.metric("Active Wells", f"{ctx['active_wells']:,}" if isinstance(ctx["active_wells"], int) else ctx["active_wells"],
+              help="Approximate active offshore well count")
+
+    badge = "Live API" if ctx["data_source"] == "bsee_api" else "BSEE Summary Data"
+    st.caption(
+        f"Data: {ctx['regulator']} | Source: {badge} | "
+        f"Note: {ctx['note']}"
+    )
+
+
 def render_overview(basin: str, fuel_type: str, target_year: int, wti: float) -> None:
     """Render the Overview tab."""
 
@@ -550,3 +622,21 @@ def render_overview(basin: str, fuel_type: str, target_year: int, wti: float) ->
         "Green = strong performer, Red = weaker."
     )
     _render_bubble(ranked, basin, fuel_type, target_year)
+
+    # ── USGS Resource Assessment ──────────────────────────────────────────────
+    st.divider()
+    _render_usgs_section(basin, fuel_type, kpi)
+
+    # ── BSEE Offshore Context ─────────────────────────────────────────────────
+    st.divider()
+    _render_bsee_section(target_year, fuel_type)
+
+    # ── Data source attribution footer ────────────────────────────────────────
+    st.divider()
+    st.caption(
+        "**Data sources:** "
+        "EIA Open Data API v2 (onshore production) | "
+        "FRED WTISPLC (WTI crude price) | "
+        "USGS National Oil & Gas Assessment (resource base) | "
+        "BSEE/BOEM data.bsee.gov (federal offshore production)"
+    )

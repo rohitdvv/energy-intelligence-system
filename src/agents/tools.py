@@ -15,8 +15,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from data.bsee_loader import get_offshore_context
 from data.eia import BASINS
 from data.loader import load_production_no_cache
+from data.usgs_loader import get_resource_assessment, resource_adequacy_years
 from kpi.metrics import basin_kpi_summary, relative_performance_index
 from models.forecaster import forecast_basin as _fit_and_forecast
 
@@ -298,6 +300,49 @@ def _exec_investigate_anomalies(inp: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _exec_get_resource_assessment(inp: dict[str, Any]) -> dict[str, Any]:
+    """Return USGS UTRR data + resource adequacy years for a basin."""
+    basin     = inp["basin"]
+    fuel_type = inp.get("fuel_type", "oil")
+    ann_prod  = inp.get("annual_production")
+
+    rec = get_resource_assessment(basin)
+    if rec is None:
+        return {"error": f"No USGS assessment found for basin={basin!r}"}
+
+    result: dict[str, Any] = {
+        "basin":           basin,
+        "source":          "USGS National Oil & Gas Assessment",
+        "report":          rec["report"],
+        "assessment_year": rec["assessment_year"],
+        "oil_utrr_bbo":    rec["oil_bbo"],
+        "gas_utrr_tcfg":   rec["gas_tcfg"],
+        "ngl_utrr_bbo":    rec["ngl_bbo"],
+        "notes":           rec["notes"],
+    }
+
+    if ann_prod and ann_prod > 0:
+        adequacy = resource_adequacy_years(basin, fuel_type, ann_prod)
+        result["resource_adequacy_years"] = adequacy
+        result["interpretation"] = (
+            f"At current annual production of {ann_prod:,.0f} units, "
+            f"the USGS estimates {adequacy:,} years of undiscovered {fuel_type} "
+            f"resource upside remaining for {basin}."
+        )
+
+    return result
+
+
+def _exec_get_offshore_context(inp: dict[str, Any]) -> dict[str, Any]:
+    """Return BSEE Gulf of Mexico offshore production context."""
+    target_year = inp.get("target_year", 2024)
+    fuel_type   = inp.get("fuel_type", "oil")
+    try:
+        return get_offshore_context(min(int(target_year), 2024), fuel_type)
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
 # ------------------------------------------------------------------
 # Anthropic tool-use schemas
 # ------------------------------------------------------------------
@@ -397,6 +442,45 @@ TOOL_SPECS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "get_resource_assessment",
+        "description": (
+            "Return USGS undiscovered technically recoverable resource (UTRR) estimates "
+            "for a basin from the National Oil & Gas Assessment. "
+            "Provides oil (BBO), gas (TCFG), and NGL estimates plus resource adequacy "
+            "(years of undiscovered upside at current production rate). "
+            "Use to assess long-term investment horizon and resource depth."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "basin": {"type": "string", "enum": _BASIN_ENUM},
+                "fuel_type": {"type": "string", "enum": ["oil", "gas"]},
+                "annual_production": {
+                    "type": "number",
+                    "description": "Current annual production (Mbbls for oil, MMcf for gas) for adequacy calc.",
+                },
+            },
+            "required": ["basin"],
+        },
+    },
+    {
+        "name": "get_offshore_context",
+        "description": (
+            "Return Gulf of Mexico federal offshore production data from BSEE/BOEM. "
+            "Covers U.S. Outer Continental Shelf production volumes, active well count, "
+            "and share of U.S. total. Use to contextualise onshore basin analysis with "
+            "the offshore supply picture."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target_year": {"type": "integer", "description": "Year for offshore data (2018–2024)."},
+                "fuel_type":   {"type": "string", "enum": ["oil", "gas"]},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "investigate_anomalies",
         "description": (
             "Detect production anomalies via Prophet in-sample residual z-scores "
@@ -416,11 +500,13 @@ TOOL_SPECS: list[dict[str, Any]] = [
 ]
 
 TOOL_EXECUTORS: dict[str, Any] = {
-    "get_production_history": _exec_get_production_history,
-    "forecast_basin": _exec_forecast_basin,
-    "get_kpi_snapshot": _exec_get_kpi_snapshot,
-    "compare_basins": _exec_compare_basins,
-    "investigate_anomalies": _exec_investigate_anomalies,
+    "get_production_history":  _exec_get_production_history,
+    "forecast_basin":          _exec_forecast_basin,
+    "get_kpi_snapshot":        _exec_get_kpi_snapshot,
+    "compare_basins":          _exec_compare_basins,
+    "investigate_anomalies":   _exec_investigate_anomalies,
+    "get_resource_assessment": _exec_get_resource_assessment,
+    "get_offshore_context":    _exec_get_offshore_context,
 }
 
 
