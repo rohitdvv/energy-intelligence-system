@@ -64,18 +64,31 @@ def _cached_anomalies(basin: str, fuel_type: str) -> dict[str, Any]:
     return execute_tool("investigate_anomalies", {"basin": basin, "fuel_type": fuel_type})
 
 
+_XGB_MAX_HORIZON = 2035  # train once to far horizon; filter per target_year at display time
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _cached_xgb_forecast(
-    basin: str, fuel_type: str, cutoff_year: int, horizon_year: int
-) -> pd.DataFrame | None:
-    """Return XGBForecastResult.df + feature_importance as a plain dict."""
+    basin: str, fuel_type: str, cutoff_year: int
+) -> dict | None:
+    """Fit XGBoost once (no target_year in key) and forecast to 2035.
+
+    Separating training from display horizon means changing the target year
+    only filters the pre-computed results — no re-fit needed.
+    """
     df = load_production_no_cache(fuel_type=fuel_type, live_fetch=True)
     bdf = df[df["basin"] == basin][["ds", "y"]].dropna().copy()
     if bdf.empty:
         return None
     try:
-        result = forecast_xgb(bdf, cutoff_year, horizon_year, basin=basin, fuel_type=fuel_type)
-        return {"df": result.df.copy(), "feat_imp": result.feature_importance, "mape": result.in_sample_mape}
+        result = forecast_xgb(
+            bdf, cutoff_year, _XGB_MAX_HORIZON, basin=basin, fuel_type=fuel_type
+        )
+        return {
+            "df":       result.df.copy(),
+            "feat_imp": result.feature_importance,
+            "mape":     result.in_sample_mape,
+        }
     except Exception as exc:
         return {"error": str(exc)}
 
@@ -160,25 +173,74 @@ def _build_chart(
         x=hist["ds"],
         y=hist["y_actual"],
         name="Historical",
-        line=dict(color="#4A90D9", width=2),
+        line=dict(color="#4A90D9", width=2.5),
         mode="lines",
         hovertemplate="%{y:,.1f}<extra>Actual</extra>",
     ))
 
-    # Prophet forecast
-    _add_forecast_traces(fig, fcast, "#FF6B35", "Prophet", "rgba(255,107,53,0.12)")
-
-    # XGBoost + Ensemble traces
     if xgb_data and "df" in xgb_data:
-        xgb_df    = xgb_data["df"].copy()
+        xgb_df       = xgb_data["df"].copy()
         xgb_df["ds"] = pd.to_datetime(xgb_df["ds"])
-        xgb_fcast = xgb_df[xgb_df["is_forecast"]]
-        _add_forecast_traces(fig, xgb_fcast, "#50C878", "XGBoost", "rgba(80,200,120,0.10)")
+        # Filter to same horizon as Prophet
+        horizon_end  = df["ds"].max()
+        xgb_df       = xgb_df[xgb_df["ds"] <= horizon_end]
+        xgb_fcast    = xgb_df[xgb_df["is_forecast"]]
 
-        # Ensemble = average of Prophet + XGBoost
+        # Ensemble (primary bold line — the best estimate)
         ens_df    = _ensemble_df(df, xgb_df)
         ens_fcast = ens_df[ens_df["is_forecast"]]
-        _add_forecast_traces(fig, ens_fcast, "#C084FC", "Ensemble", "rgba(192,132,252,0.10)", show_ci=False)
+
+        # Forecast uncertainty band = spread between Prophet and XGBoost
+        # This is not a bug — it's model-based uncertainty quantification
+        band = fcast[["ds", "y_forecast"]].merge(
+            xgb_fcast[["ds", "y_forecast"]], on="ds", suffixes=("_p", "_x")
+        )
+        if not band.empty:
+            band_high = band[["y_forecast_p", "y_forecast_x"]].max(axis=1)
+            band_low  = band[["y_forecast_p", "y_forecast_x"]].min(axis=1)
+            band_x    = list(band["ds"]) + list(band["ds"].iloc[::-1])
+            band_y    = list(band_high)  + list(band_low.iloc[::-1])
+            fig.add_trace(go.Scatter(
+                x=band_x, y=band_y, fill="toself",
+                fillcolor="rgba(192,132,252,0.13)",
+                line=dict(color="rgba(0,0,0,0)"),
+                name="Forecast Uncertainty Band",
+                hoverinfo="skip",
+            ))
+
+        # Ensemble forecast — primary thick line
+        if not ens_fcast.empty:
+            fig.add_trace(go.Scatter(
+                x=ens_fcast["ds"], y=ens_fcast["y_forecast"],
+                name="Ensemble (best estimate)",
+                line=dict(color="#C084FC", width=3),
+                mode="lines",
+                hovertemplate="%{y:,.1f}<extra>Ensemble</extra>",
+            ))
+
+        # Prophet — secondary dashed (hidden by default, toggleable)
+        if not fcast.empty:
+            fig.add_trace(go.Scatter(
+                x=fcast["ds"], y=fcast["y_forecast"],
+                name="Prophet",
+                line=dict(color="#FF6B35", width=1.5, dash="dot"),
+                mode="lines", visible="legendonly",
+                hovertemplate="%{y:,.1f}<extra>Prophet</extra>",
+            ))
+
+        # XGBoost — secondary dashed (hidden by default, toggleable)
+        if not xgb_fcast.empty:
+            fig.add_trace(go.Scatter(
+                x=xgb_fcast["ds"], y=xgb_fcast["y_forecast"],
+                name="XGBoost",
+                line=dict(color="#50C878", width=1.5, dash="dot"),
+                mode="lines", visible="legendonly",
+                hovertemplate="%{y:,.1f}<extra>XGBoost</extra>",
+            ))
+
+    else:
+        # XGBoost unavailable — fall back to Prophet only
+        _add_forecast_traces(fig, fcast, "#FF6B35", "Prophet", "rgba(255,107,53,0.12)")
 
     # Cutoff vertical line — Plotly 5.x requires a numeric x value (ms since epoch)
     # on datetime axes; ISO strings cause "unsupported operand type" internally.
@@ -375,17 +437,14 @@ def _interactive_chart(basin: str, fuel_type: str, target_year: int) -> None:
         key="forecast_cutoff_slider",
     )
 
-    col_prophet, col_xgb = st.columns([3, 1])
-    with col_prophet:
-        with st.spinner(f"Fitting Prophet model for {basin} {fuel_type}…"):
-            try:
-                fc_df = _cached_forecast(basin, fuel_type, cutoff_year, target_year)
-            except Exception as exc:
-                st.error(f"Prophet forecast failed: {exc}")
-                return
-    with col_xgb:
-        with st.spinner("Fitting XGBoost…"):
-            xgb_data = _cached_xgb_forecast(basin, fuel_type, cutoff_year, target_year)
+    with st.spinner(f"Running forecasts for {basin} ({fuel_type})…"):
+        try:
+            fc_df = _cached_forecast(basin, fuel_type, cutoff_year, target_year)
+        except Exception as exc:
+            st.error(f"Prophet forecast failed: {exc}")
+            return
+        # XGBoost cache key has NO target_year — model trains once, we filter for display
+        xgb_data = _cached_xgb_forecast(basin, fuel_type, cutoff_year)
 
     if fc_df is None:
         st.warning(

@@ -133,9 +133,9 @@ def forecast_xgb(
     y_train = train["y"].values
 
     model = xgb.XGBRegressor(
-        n_estimators=400,
+        n_estimators=200,
         max_depth=4,
-        learning_rate=0.04,
+        learning_rate=0.08,
         subsample=0.8,
         colsample_bytree=0.8,
         min_child_weight=3,
