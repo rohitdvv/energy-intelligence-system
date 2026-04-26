@@ -206,7 +206,10 @@ def render_chat(client: anthropic.Anthropic) -> None:
         _render_msg(msg)
 
     # ── Execute pending agent call (shows spinner inline) ──────────────────
-    if st.session_state.pop("_chat_pending", False):
+    _pending = st.session_state.get("_chat_pending", False)
+    if "_chat_pending" in st.session_state:
+        del st.session_state["_chat_pending"]
+    if _pending:
         with st.chat_message("assistant"):
             with st.spinner("Fetching live data and analyzing..."):
                 _run_agent(client)

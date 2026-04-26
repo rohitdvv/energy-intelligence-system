@@ -192,7 +192,7 @@ def _build_chart(
                     text=f"<b>{short}{dev_s}</b>",
                     showarrow=True,
                     arrowhead=2,
-                    arrowlen=1,
+                    arrowsize=1,
                     arrowcolor="#FF4444",
                     arrowwidth=1.2,
                     ax=0,
