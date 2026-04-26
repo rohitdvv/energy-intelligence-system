@@ -241,18 +241,24 @@ def render_overview(basin: str, fuel_type: str, target_year: int, wti: float) ->
             if yoy_year is not None
             else "Year-over-year % change in annual production"
         )
+        yoy_label = (
+            f"YoY Growth ({yoy_year} vs {yoy_year - 1})"
+            if yoy_year is not None
+            else "YoY Growth"
+        )
         c2.metric(
-            "YoY Growth",
+            yoy_label,
             f"{yoy:+.1f}%" if yoy is not None else "N/A",
             delta=f"{yoy:.1f}%" if yoy is not None else None,
-            help=yoy_help,
+            help="Based on the most recent full calendar year of actual EIA data — not a forecast figure.",
         )
 
         cv = vol.get("cv_pct")
+        interp = vol.get("interpretation", "—")
         c3.metric(
-            "Volatility (CV%)",
+            "Volatility CV% (historical)",
             f"{cv:.1f}%" if cv is not None else "N/A",
-            help=f"{vol.get('interpretation','—')} — coefficient of variation; lower = more stable",
+            help=f"{interp} — coefficient of variation on historical actuals; not affected by target year.",
         )
 
         rev_m = rev.get("revenue_usd_millions")
