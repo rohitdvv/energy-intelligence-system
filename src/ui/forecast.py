@@ -138,7 +138,7 @@ def _build_chart(
         annotation_position="top right",
     )
 
-    # Anomaly scatter overlay
+    # Anomaly scatter overlay + event label annotations
     anom_list: list[dict[str, Any]] = (
         anomalies.get("anomalies", []) if "error" not in anomalies else []
     )
@@ -155,21 +155,54 @@ def _build_chart(
                 ax.append(pd.Timestamp(a["date"]))
                 ay.append(val)
                 dev = a.get("deviation_pct")
+                event = a.get("known_event", "No catalogued event")
                 atxt.append(
-                    f"{a['date']}<br>{a.get('known_event','')}<br>"
-                    f"Z={a['z_score']:.1f}"
-                    + (f" ({dev:+.1f}%)" if dev is not None else "")
+                    f"<b>{a['date']}</b><br>"
+                    f"{event}<br>"
+                    f"Z-score: {a['z_score']:.1f}"
+                    + (f" ({dev:+.1f}% vs expected)" if dev is not None else "")
                 )
         if ax:
             fig.add_trace(go.Scatter(
                 x=ax, y=ay,
                 mode="markers",
                 name="Anomaly",
-                marker=dict(color="red", size=9, symbol="circle",
-                            line=dict(color="white", width=1)),
+                marker=dict(color="#FF4444", size=10, symbol="circle",
+                            line=dict(color="white", width=1.5)),
                 hovertemplate="<b>%{text}</b><extra></extra>",
                 text=atxt,
             ))
+
+            # Annotate the top-5 anomalies by |z_score| directly on the chart
+            labelled = sorted(
+                [a for a in anom_list if actual_map.get(a["date"]) is not None],
+                key=lambda a: abs(a["z_score"]),
+                reverse=True,
+            )[:5]
+            for a in labelled:
+                val = actual_map[a["date"]]
+                event = a.get("known_event", "")
+                # Truncate long event names to keep chart readable
+                short = event.split("—")[0].strip()[:28] if event else a["date"]
+                dev   = a.get("deviation_pct")
+                dev_s = f" {dev:+.0f}%" if dev is not None else ""
+                fig.add_annotation(
+                    x=pd.Timestamp(a["date"]),
+                    y=val,
+                    text=f"<b>{short}{dev_s}</b>",
+                    showarrow=True,
+                    arrowhead=2,
+                    arrowlen=1,
+                    arrowcolor="#FF4444",
+                    arrowwidth=1.2,
+                    ax=0,
+                    ay=-42,
+                    font=dict(size=9, color="#FF9999"),
+                    bgcolor="rgba(18,10,10,.75)",
+                    bordercolor="#FF4444",
+                    borderwidth=1,
+                    borderpad=3,
+                )
 
     unit = "Mbbls/month" if fuel_type == "oil" else "MMcf/month"
     fig.update_layout(
@@ -177,8 +210,8 @@ def _build_chart(
         xaxis_title="",
         yaxis_title=unit,
         template="plotly_dark",
-        paper_bgcolor="#0E1117",
-        plot_bgcolor="#1A1D24",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(18,26,44,.55)",
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
         margin=dict(t=80, b=40),
@@ -223,12 +256,26 @@ def _interactive_chart(basin: str, fuel_type: str, target_year: int) -> None:
     fig = _build_chart(fc_df, cutoff_year, anom, basin, fuel_type)
     st.plotly_chart(fig, use_container_width=True)
 
-    n = len(anom.get("anomalies", [])) if "error" not in anom else 0
+    anom_list = anom.get("anomalies", []) if "error" not in anom else []
+    n = len(anom_list)
     if n:
         st.caption(
-            f"🔴 {n} anomalous month{'s' if n != 1 else ''} detected (|z| > 2.5) — "
-            "hover red dots for event context."
+            f"**{n} anomalous month{'s' if n != 1 else ''} detected** (|z| > 2.5) — "
+            "labelled arrows show the top events; hover dots for full detail."
         )
+        # Collapsible anomaly event table
+        with st.expander(f"View all {n} anomaly events"):
+            rows = []
+            for a in sorted(anom_list, key=lambda x: x["date"]):
+                rows.append({
+                    "Date":          a["date"],
+                    "Direction":     a["direction"].title(),
+                    "Deviation":     f"{a['deviation_pct']:+.1f}%" if a.get("deviation_pct") else "N/A",
+                    "Z-score":       f"{a['z_score']:.2f}",
+                    "Known Event":   a.get("known_event", "—"),
+                })
+            import pandas as _pd
+            st.dataframe(_pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
 def render_forecast(basin: str, fuel_type: str, target_year: int, _wti: float) -> None:
