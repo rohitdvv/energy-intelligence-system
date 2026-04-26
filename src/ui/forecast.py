@@ -1,19 +1,16 @@
-"""Forecast tab: multi-model comparison — Prophet, XGBoost, Ensemble."""
+"""Forecast tab: Prophet production forecast with anomaly overlay."""
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
 
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from plotly.subplots import make_subplots
 
 from agents.tools import execute_tool
 from data.loader import load_production_no_cache
 from models.forecaster import forecast_basin as _fit
-from models.xgb_forecaster import forecast_xgb
 
 _NOW_YEAR = datetime.now().year
 
@@ -64,46 +61,6 @@ def _cached_anomalies(basin: str, fuel_type: str) -> dict[str, Any]:
     return execute_tool("investigate_anomalies", {"basin": basin, "fuel_type": fuel_type})
 
 
-_XGB_MAX_HORIZON = 2035  # train once to far horizon; filter per target_year at display time
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def _cached_xgb_forecast(
-    basin: str, fuel_type: str, cutoff_year: int
-) -> dict | None:
-    """Fit XGBoost once (no target_year in key) and forecast to 2035.
-
-    Separating training from display horizon means changing the target year
-    only filters the pre-computed results — no re-fit needed.
-    """
-    df = load_production_no_cache(fuel_type=fuel_type, live_fetch=True)
-    bdf = df[df["basin"] == basin][["ds", "y"]].dropna().copy()
-    if bdf.empty:
-        return None
-    try:
-        result = forecast_xgb(
-            bdf, cutoff_year, _XGB_MAX_HORIZON, basin=basin, fuel_type=fuel_type
-        )
-        return {
-            "df":       result.df.copy(),
-            "feat_imp": result.feature_importance,
-            "mape":     result.in_sample_mape,
-        }
-    except Exception as exc:
-        return {"error": str(exc)}
-
-
-def _ensemble_df(prophet_df: pd.DataFrame, xgb_df: pd.DataFrame) -> pd.DataFrame:
-    """Average Prophet and XGBoost forecasts into an ensemble."""
-    merged = prophet_df[["ds", "y_forecast", "y_lower", "y_upper", "is_forecast", "y_actual"]].merge(
-        xgb_df[["ds", "y_forecast", "y_lower", "y_upper"]],
-        on="ds", suffixes=("_p", "_x"),
-    )
-    merged["y_forecast"] = (merged["y_forecast_p"] + merged["y_forecast_x"]) / 2
-    merged["y_lower"]    = (merged["y_lower_p"]    + merged["y_lower_x"])    / 2
-    merged["y_upper"]    = (merged["y_upper_p"]    + merged["y_upper_x"])    / 2
-    return merged[["ds", "y_actual", "y_forecast", "y_lower", "y_upper", "is_forecast"]]
-
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _cached_backtest(basin: str, fuel_type: str) -> dict[str, Any] | None:
@@ -123,41 +80,12 @@ def _cached_backtest(basin: str, fuel_type: str) -> dict[str, Any] | None:
 # Chart builder
 # ------------------------------------------------------------------
 
-def _add_forecast_traces(
-    fig: go.Figure,
-    fcast: pd.DataFrame,
-    color: str,
-    name: str,
-    ci_color: str,
-    show_ci: bool = True,
-) -> None:
-    """Add a forecast line + optional CI band to an existing figure."""
-    if fcast.empty:
-        return
-    ci_x = list(fcast["ds"]) + list(fcast["ds"].iloc[::-1])
-    ci_y = list(fcast["y_upper"]) + list(fcast["y_lower"].iloc[::-1])
-    if show_ci:
-        fig.add_trace(go.Scatter(
-            x=ci_x, y=ci_y, fill="toself",
-            fillcolor=ci_color, line=dict(color="rgba(0,0,0,0)"),
-            name=f"{name} 80% CI", hoverinfo="skip", showlegend=False,
-        ))
-    fig.add_trace(go.Scatter(
-        x=fcast["ds"], y=fcast["y_forecast"],
-        name=name,
-        line=dict(color=color, width=2, dash="dash"),
-        mode="lines",
-        hovertemplate=f"%{{y:,.1f}}<extra>{name}</extra>",
-    ))
-
-
 def _build_chart(
     fc_df: pd.DataFrame,
     cutoff_year: int,
     anomalies: dict[str, Any],
     basin: str,
     fuel_type: str,
-    xgb_data: dict[str, Any] | None = None,
 ) -> go.Figure:
     df = fc_df.copy()
     df["ds"] = pd.to_datetime(df["ds"])
@@ -173,74 +101,29 @@ def _build_chart(
         x=hist["ds"],
         y=hist["y_actual"],
         name="Historical",
-        line=dict(color="#4A90D9", width=2.5),
+        line=dict(color="#4A90D9", width=2),
         mode="lines",
         hovertemplate="%{y:,.1f}<extra>Actual</extra>",
     ))
 
-    if xgb_data and "df" in xgb_data:
-        xgb_df       = xgb_data["df"].copy()
-        xgb_df["ds"] = pd.to_datetime(xgb_df["ds"])
-        # Filter to same horizon as Prophet
-        horizon_end  = df["ds"].max()
-        xgb_df       = xgb_df[xgb_df["ds"] <= horizon_end]
-        xgb_fcast    = xgb_df[xgb_df["is_forecast"]]
-
-        # Ensemble (primary bold line — the best estimate)
-        ens_df    = _ensemble_df(df, xgb_df)
-        ens_fcast = ens_df[ens_df["is_forecast"]]
-
-        # Forecast uncertainty band = spread between Prophet and XGBoost
-        # This is not a bug — it's model-based uncertainty quantification
-        band = fcast[["ds", "y_forecast"]].merge(
-            xgb_fcast[["ds", "y_forecast"]], on="ds", suffixes=("_p", "_x")
-        )
-        if not band.empty:
-            band_high = band[["y_forecast_p", "y_forecast_x"]].max(axis=1)
-            band_low  = band[["y_forecast_p", "y_forecast_x"]].min(axis=1)
-            band_x    = list(band["ds"]) + list(band["ds"].iloc[::-1])
-            band_y    = list(band_high)  + list(band_low.iloc[::-1])
-            fig.add_trace(go.Scatter(
-                x=band_x, y=band_y, fill="toself",
-                fillcolor="rgba(192,132,252,0.13)",
-                line=dict(color="rgba(0,0,0,0)"),
-                name="Forecast Uncertainty Band",
-                hoverinfo="skip",
-            ))
-
-        # Ensemble forecast — primary thick line
-        if not ens_fcast.empty:
-            fig.add_trace(go.Scatter(
-                x=ens_fcast["ds"], y=ens_fcast["y_forecast"],
-                name="Ensemble (best estimate)",
-                line=dict(color="#C084FC", width=3),
-                mode="lines",
-                hovertemplate="%{y:,.1f}<extra>Ensemble</extra>",
-            ))
-
-        # Prophet — secondary dashed (hidden by default, toggleable)
-        if not fcast.empty:
-            fig.add_trace(go.Scatter(
-                x=fcast["ds"], y=fcast["y_forecast"],
-                name="Prophet",
-                line=dict(color="#FF6B35", width=1.5, dash="dot"),
-                mode="lines", visible="legendonly",
-                hovertemplate="%{y:,.1f}<extra>Prophet</extra>",
-            ))
-
-        # XGBoost — secondary dashed (hidden by default, toggleable)
-        if not xgb_fcast.empty:
-            fig.add_trace(go.Scatter(
-                x=xgb_fcast["ds"], y=xgb_fcast["y_forecast"],
-                name="XGBoost",
-                line=dict(color="#50C878", width=1.5, dash="dot"),
-                mode="lines", visible="legendonly",
-                hovertemplate="%{y:,.1f}<extra>XGBoost</extra>",
-            ))
-
-    else:
-        # XGBoost unavailable — fall back to Prophet only
-        _add_forecast_traces(fig, fcast, "#FF6B35", "Prophet", "rgba(255,107,53,0.12)")
+    if not fcast.empty:
+        # 80% CI band
+        ci_x = list(fcast["ds"]) + list(fcast["ds"].iloc[::-1])
+        ci_y = list(fcast["y_upper"]) + list(fcast["y_lower"].iloc[::-1])
+        fig.add_trace(go.Scatter(
+            x=ci_x, y=ci_y, fill="toself",
+            fillcolor="rgba(255,107,53,0.15)",
+            line=dict(color="rgba(0,0,0,0)"),
+            name="80% CI", hoverinfo="skip",
+        ))
+        # Forecast line
+        fig.add_trace(go.Scatter(
+            x=fcast["ds"], y=fcast["y_forecast"],
+            name="Forecast (Prophet)",
+            line=dict(color="#FF6B35", width=2, dash="dash"),
+            mode="lines",
+            hovertemplate="%{y:,.1f}<extra>Forecast</extra>",
+        ))
 
     # Cutoff vertical line — Plotly 5.x requires a numeric x value (ms since epoch)
     # on datetime axes; ISO strings cause "unsupported operand type" internally.
@@ -337,91 +220,6 @@ def _build_chart(
 # Fragment + render
 # ------------------------------------------------------------------
 
-def _render_model_leaderboard(
-    basin: str, fuel_type: str, xgb_data: dict[str, Any] | None
-) -> None:
-    """Render a MAPE comparison table for all three models."""
-    with st.spinner("Running held-out backtests…"):
-        bt_prophet = _cached_backtest(basin, fuel_type)
-
-    rows = []
-    if bt_prophet and "mape_pct" in bt_prophet:
-        rows.append({"Model": "Prophet", "Held-out MAPE": bt_prophet["mape_pct"],
-                     "Test window": f"{bt_prophet['test_start']} → {bt_prophet['test_end']}",
-                     "Quality": _quality(bt_prophet["mape_pct"])})
-
-    xgb_mape = (xgb_data or {}).get("mape")
-    if xgb_mape is not None:
-        rows.append({"Model": "XGBoost", "Held-out MAPE": round(xgb_mape, 2),
-                     "Test window": "in-sample diagnostic", "Quality": _quality(xgb_mape)})
-
-    if len(rows) == 2:
-        ens_mape = round((rows[0]["Held-out MAPE"] + rows[1]["Held-out MAPE"]) / 2, 2)
-        rows.append({"Model": "Ensemble (Prophet + XGBoost)", "Held-out MAPE": ens_mape,
-                     "Test window": "averaged", "Quality": _quality(ens_mape)})
-
-    if rows:
-        import pandas as _pd
-        st.markdown("#### Model Accuracy Leaderboard")
-        st.caption("Lower MAPE = better. Ensemble combines both models with equal weight.")
-        df_lb = _pd.DataFrame(rows)
-        best_idx = df_lb["Held-out MAPE"].idxmin()
-        st.dataframe(
-            df_lb.style.format({"Held-out MAPE": "{:.2f}%"})
-                       .highlight_min(subset=["Held-out MAPE"], color="#1a3d1a"),
-            use_container_width=True, hide_index=True,
-        )
-
-
-def _quality(mape: float) -> str:
-    if mape < 5:   return "EXCELLENT"
-    if mape < 10:  return "GOOD"
-    if mape < 20:  return "OK"
-    return "POOR"
-
-
-def _render_feature_importance(feat_imp: dict[str, float]) -> None:
-    """Horizontal bar chart of XGBoost feature importances."""
-    items  = sorted(feat_imp.items(), key=lambda x: x[1])
-    labels = [k.replace("_", " ").title() for k, _ in items]
-    values = [v for _, v in items]
-
-    # Friendly label map
-    label_map = {
-        "Lag 1": "Lag 1m", "Lag 2": "Lag 2m", "Lag 3": "Lag 3m",
-        "Lag 6": "Lag 6m", "Lag 12": "Lag 12m (seasonal)",
-        "Rolling Mean 3": "Rolling Mean 3m", "Rolling Mean 6": "Rolling Mean 6m",
-        "Rolling Mean 12": "Rolling Mean 12m", "Rolling Std 6": "Rolling Std 6m",
-        "Month Sin": "Month (sin)", "Month Cos": "Month (cos)",
-        "Year Norm": "Year Trend",
-    }
-    labels = [label_map.get(l, l) for l in labels]
-
-    fig = go.Figure(go.Bar(
-        x=values, y=labels, orientation="h",
-        marker=dict(
-            color=values,
-            colorscale="Viridis",
-            showscale=False,
-        ),
-        hovertemplate="%{y}: %{x:.3f}<extra></extra>",
-    ))
-    fig.update_layout(
-        title=dict(text="XGBoost Feature Importance — what drives the forecast?", font=dict(size=12)),
-        template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(18,26,44,.5)",
-        height=320,
-        margin=dict(t=36, b=20, l=10, r=10),
-        xaxis_title="Importance score",
-        font=dict(size=10),
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption(
-        "Lag 12m dominates → strong seasonal autocorrelation in production. "
-        "Rolling means capture medium-term momentum. Year Trend encodes secular growth/decline."
-    )
-
 
 @st.fragment
 def _interactive_chart(basin: str, fuel_type: str, target_year: int) -> None:
@@ -437,14 +235,12 @@ def _interactive_chart(basin: str, fuel_type: str, target_year: int) -> None:
         key="forecast_cutoff_slider",
     )
 
-    with st.spinner(f"Running forecasts for {basin} ({fuel_type})…"):
+    with st.spinner(f"Fitting Prophet for {basin} ({fuel_type})…"):
         try:
             fc_df = _cached_forecast(basin, fuel_type, cutoff_year, target_year)
         except Exception as exc:
-            st.error(f"Prophet forecast failed: {exc}")
+            st.error(f"Forecast failed: {exc}")
             return
-        # XGBoost cache key has NO target_year — model trains once, we filter for display
-        xgb_data = _cached_xgb_forecast(basin, fuel_type, cutoff_year)
 
     if fc_df is None:
         st.warning(
@@ -455,15 +251,8 @@ def _interactive_chart(basin: str, fuel_type: str, target_year: int) -> None:
     with st.spinner("Loading anomaly detection…"):
         anom = _cached_anomalies(basin, fuel_type)
 
-    fig = _build_chart(fc_df, cutoff_year, anom, basin, fuel_type, xgb_data=xgb_data)
+    fig = _build_chart(fc_df, cutoff_year, anom, basin, fuel_type)
     st.plotly_chart(fig, use_container_width=True)
-
-    # ── Model leaderboard ────────────────────────────────────────────────────
-    _render_model_leaderboard(basin, fuel_type, xgb_data)
-
-    # ── XGBoost feature importance ───────────────────────────────────────────
-    if xgb_data and "feat_imp" in xgb_data:
-        _render_feature_importance(xgb_data["feat_imp"])
 
     anom_list = anom.get("anomalies", []) if "error" not in anom else []
     n = len(anom_list)

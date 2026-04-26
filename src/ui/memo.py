@@ -304,12 +304,15 @@ def render_memo(basin: str, fuel_type: str, target_year: int) -> None:
     memo_md: str | None = st.session_state.get(memo_key)
 
     if memo_md:
-        pdf_key = f"pdf2_{basin}_{fuel_type}_{target_year}"
-        pdf_err_key = f"pdf_err2_{basin}_{fuel_type}_{target_year}"
-        if pdf_key not in st.session_state and debate_result is not None:
+        pdf_key     = f"pdf3_{basin}_{fuel_type}_{target_year}"
+        pdf_err_key = f"pdf_err3_{basin}_{fuel_type}_{target_year}"
+
+        # Regenerate whenever the memo was just assembled OR key is missing
+        if (generate or pdf_key not in st.session_state) and debate_result is not None:
+            st.session_state.pop(pdf_key, None)
+            st.session_state.pop(pdf_err_key, None)
             try:
                 st.session_state[pdf_key] = _generate_pdf_bytes(debate_result)
-                st.session_state.pop(pdf_err_key, None)
             except Exception as exc:
                 st.session_state[pdf_key] = None
                 st.session_state[pdf_err_key] = str(exc)
@@ -329,9 +332,11 @@ def render_memo(basin: str, fuel_type: str, target_year: int) -> None:
                     use_container_width=True,
                 )
             elif st.session_state.get(pdf_err_key):
-                st.warning(f"PDF error: {st.session_state[pdf_err_key]}", icon="⚠️")
+                st.error(f"PDF error: {st.session_state[pdf_err_key]}", icon="⚠️")
+            elif debate_result is None:
+                st.caption("Run Committee first to enable PDF.")
             else:
-                st.caption("PDF unavailable — install `fpdf2`")
+                st.caption("Generating PDF…")
 
         st.divider()
         st.markdown(memo_md)
