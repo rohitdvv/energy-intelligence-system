@@ -1,18 +1,18 @@
 # Architecture Overview
 
-## Final Tech Stack
+## Tech Stack
 
 | Layer | Technology | Notes |
 |-------|-----------|-------|
-| UI framework | Streamlit ≥ 1.37 | Four-tab layout; `@st.fragment` for slider isolation |
-| Forecasting | Facebook Prophet 1.1.5 + CmdStanPy < 1.2.0 | Multiplicative seasonality, monthly "MS" resampling |
-| AI agents | Anthropic Claude (`claude-sonnet-4-5-20250929`) | Tool-use loop; `cache_control: ephemeral` on system prompts |
-| Data sources | EIA Open Data API v2, FRED API | Parquet cache layer; live-fetch fallback when no Parquet |
-| Charts | Plotly 5.22 | Dark-mode theme; Unix-ms timestamps for `add_vline` |
-| Data layer | pandas 2.2 + pyarrow 16 | Parquet persistence under `data/raw/` |
-| Language | Python 3.11 | All backend logic; Streamlit as the only web layer |
-
-No changes from `planning/planning.md` in the core stack. `duckdb` was included as a dependency for future SQL analytics but not used in the shipped version — a deliberate trade-off to keep the data layer simple.
+| UI framework | Streamlit 1.56 | 7-tab layout; `@st.fragment` for slider isolation |
+| Forecasting | Facebook Prophet 1.1.5 + CmdStanPy | Multiplicative seasonality, 80% CI |
+| AI agents | Anthropic Claude `claude-sonnet-4-6` | Tool-use loop; multi-turn chat |
+| Data sources | EIA Open Data API v2, FRED API | Parquet cache; live-fetch fallback |
+| Charts | Plotly 5.22 | `go.Scattergeo`, `go.Choropleth`, `go.Scatterpolar` |
+| PDF export | fpdf2 2.7+ | Latin-1 text sanitisation |
+| Data layer | pandas 2.2 + pyarrow 16 | Parquet under `data/raw/` |
+| Well economics | Arps hyperbolic decline | IRR bisection, NPV at monthly resolution |
+| Language | Python 3.11 | |
 
 ---
 
@@ -20,88 +20,102 @@ No changes from `planning/planning.md` in the core stack. `duckdb` was included 
 
 ```
 src/
-├── app.py                  # Streamlit entry point — sidebar, tabs, shared Anthropic client
-├── config.py               # Dual-mode API key access (st.secrets → os.environ → .env)
+├── app.py                    # Entry point — sidebar, 7 tabs, shared Anthropic client
+├── config.py                 # API key access (st.secrets → os.environ → .env)
 ├── data/
-│   ├── eia.py              # EIA Open Data API v2 client (oil, gas, WTI) with retry
-│   ├── fred.py             # FRED API client (WTI spot price series)
-│   ├── loader.py           # Parquet cache layer; live-fetch fallback; Streamlit cache wrappers
-│   └── fetch_all.py        # CLI script — pre-fetches all 7 basins × 2 fuels and saves Parquet
+│   ├── eia.py                # EIA Open Data API v2 client with retry/backoff
+│   ├── fred.py               # FRED API client (WTI spot price)
+│   ├── loader.py             # Parquet cache + live-fetch + st.cache_data wrappers
+│   └── fetch_all.py          # CLI pre-fetch script
 ├── models/
-│   └── forecaster.py       # ForecastResult dataclass + BasinForecaster + forecast_basin()
+│   ├── forecaster.py         # ForecastResult dataclass + forecast_basin()
+│   ├── backtest.py           # Held-out MAPE backtest
+│   └── xgb_forecaster.py     # XGBoost recursive forecaster (retained for future use)
 ├── kpi/
-│   └── metrics.py          # Six KPI functions + basin_kpi_summary() aggregator
+│   └── metrics.py            # Six KPI functions + basin_kpi_summary()
 ├── agents/
-│   ├── tools.py            # Five Anthropic tool schemas, executor functions, execute_tool()
-│   ├── prompts.py          # System prompts for Bull, Bear, PM agents
-│   └── committee.py        # Committee class — tool-use loop, debate(), parse_pm_verdict()
+│   ├── tools.py              # Five tool schemas + execute_tool()
+│   ├── prompts.py            # System prompts for Bull, Bear, PM agents
+│   ├── committee.py          # Three-agent debate loop + parse_pm_verdict()
+│   └── chat_agent.py         # Multi-turn conversational agent
 └── ui/
-    ├── overview.py         # Tab 1: KPI cards, basin comparison table, RPI bar chart
-    ├── forecast.py         # Tab 2: interactive Prophet chart with anomaly overlay
-    ├── committee.py        # Tab 3: live multi-agent debate with st.status updates
-    └── memo.py             # Tab 4: template-driven deal memo with download button
+    ├── overview.py           # Tab 1: KPI cards + 5 comparison charts
+    ├── forecast.py           # Tab 2: Prophet chart + anomaly overlay
+    ├── map.py                # Tab 3: interactive Scattergeo + Choropleth
+    ├── chat.py               # Tab 4: multi-turn AI chat with inline charts
+    ├── committee.py          # Tab 5: live 3-agent investment debate
+    ├── memo.py               # Tab 6: deal memo + PDF download
+    └── economics.py          # Tab 7: well economics (Arps + NPV/IRR)
 ```
 
 ---
 
-## Cross-Tab Data Flow
+## Data Flow
 
-**1. Sidebar → all four tabs**
-The sidebar (rendered once in `app.py`) collects `(basin, fuel_type, target_year, wti)` as a Python tuple. This tuple is passed as function arguments to each `render_*()` call. There is no shared Streamlit session state for these values — Streamlit's re-run model re-passes them on every interaction.
-
-**2. EIA data → Overview KPI cards**
-`render_overview()` calls `_kpi_for_basin(basin, fuel_type, target_year, wti)` which calls:
+### EIA → App
 ```
 load_production_no_cache(fuel_type, live_fetch=True)
   → try data/raw/{fuel_type}_production.parquet
-  → on miss: EIAClient().fetch_{oil,gas}_production_by_basin() for all 7 basins
-  → save Parquet, return DataFrame
+  → miss → EIAClient.fetch_*_production_by_basin() for all 7 basins
+  → drop partial month (< 50% of 6-month avg)
+  → save Parquet → return DataFrame
 ```
-The full multi-basin DataFrame is loaded once and filtered to the selected basin inside `_kpi_for_basin`. The `@st.cache_data(ttl=3600)` decorator ensures subsequent tab-switch rerenders hit memory, not EIA.
+`@st.cache_data(ttl=3600)` — one real EIA call per basin per hour maximum.
 
-**3. Prophet forecast → Forecast tab anomaly overlay**
-`_cached_forecast(basin, fuel_type, cutoff_year, horizon_year)` and `_cached_anomalies(basin, fuel_type)` are both `@st.cache_data` functions. The forecast tab uses `@st.fragment` on `_interactive_chart()` so dragging the cutoff slider only reruns the fragment, not the full page. Anomaly detection runs a second independent Prophet fit on the full historical series; its results are merged with the chart's historical actuals using a `{YYYY-MM: y_actual}` lookup dict.
+### Map Click → Sidebar Sync
+```
+Click → st.session_state["_pending_basin"] = basin → st.rerun()
+_sidebar() → pops _pending_basin → sets selectbox value before render
+All tabs re-render with new basin
+```
 
-**4. Committee debate → Memo tab**
-After a committee debate completes, `render_committee()` stores the result dict in `st.session_state[f"debate_{basin}_{fuel_type}_{target_year}"]`. `render_memo()` reads this same key to populate the deal memo template. If no debate result exists, the download button is disabled.
-
----
-
-## AI Integration Design
-
-### Context passed to the model
-
-Each agent receives a structured user message containing basin, fuel type, target year, and WTI assumption. It then calls tools to fetch data rather than being pre-loaded with all data. This keeps the context window small on the first turn and lets Claude decide which tools to call based on its own reasoning.
-
-Available tools:
-- `get_production_history` — latest month, 12-month avg, YoY change, trend direction
-- `forecast_basin` — Prophet forecast, annual total, 80% CI, historical CAGR
-- `get_kpi_snapshot` — full KPI suite for one basin
-- `compare_basins` — all 7 basins ranked by projected production + RPI scores
-- `investigate_anomalies` — in-sample Prophet residual z-scores with event calendar lookup
-
-### Boundary between AI output and verified data
-
-The citation rule is enforced in all three system prompts: **"If you cannot cite a specific tool call output for a numeric claim, do not state that number."** This forces every quantitative claim in agent responses to trace back to a tool result. The UI renders tool-call summaries alongside agent prose so a human reviewer can cross-check.
-
-### Prompt engineering decisions
-
-- **Bull (Riley Chen)**: Required to call ≥ 2 tools; bias toward production upside and growth catalysts.
-- **Bear (Marcus Webb)**: Required to call `investigate_anomalies` (mandatory) plus at least one other tool; bias toward risk, decline, and volatility.
-- **PM (Chair)**: Reads Bull + Bear text; no tool access. Outputs five parseable fields (`VERDICT:`, `CONVICTION:`, `RATIONALE:`, `TOP_RISK:`, `TOP_OPPORTUNITY:`).
-- **`cache_control: ephemeral`** on all system prompts — Anthropic caches the prompt block for ~5 minutes, reducing token cost on multi-turn tool loops.
-- **`max_tokens: 800`** per turn — keeps individual responses concise and reduces runaway verbosity.
+### Committee → Memo
+```
+Committee.debate() → stores dict in st.session_state["debate_{b}_{f}_{y}"]
+render_memo() → reads key → _generate_memo() + _generate_pdf_bytes()
+PDF regenerates on every "Generate Deal Memo" click
+```
 
 ---
 
-## What Changed From the Plan
+## AI Agent Architecture
 
-1. **`live_fetch=True` by default** — Originally planned to require a local `fetch_all.py` run before the Streamlit app would show data. Changed to live-fetch-by-default after realising Streamlit Cloud deployments have no pre-seeded Parquet files. The Parquet files are still written on first fetch and used on subsequent loads.
+### Tool-Use Loop
+```
+User prompt → Claude API (tools=TOOL_SPECS)
+  → model returns tool_use blocks
+  → execute_tool() dispatches to Python
+  → results appended as tool_result messages
+  → loop until end_turn (max 8 turns)
+  → final text response
+```
 
-2. **`@st.fragment` on forecast chart** — Not in the original plan. Added to prevent the entire page from re-running when the cutoff slider is dragged, which would re-trigger the Prophet fit and compare-basins call on every slider tick.
+### Three Committee Agents
+| Agent | Bias | Mandatory tools |
+|-------|------|----------------|
+| Riley Chen (Bull) | Upside / growth | ≥ 2 tools |
+| Marcus Webb (Bear) | Risk / decline | `investigate_anomalies` + ≥ 1 other |
+| Sarah Kim (PM) | Balanced verdict | None (reads Bull + Bear) |
 
-3. **`add_vline` Unix-ms timestamp** — Plotly 5.22 requires numeric (Unix milliseconds) for `x` on datetime axes, not ISO strings. The initial implementation used `.isoformat()` and raised a `TypeError` at runtime; fixed to `.timestamp() * 1000`.
+### Five Tools
+| Tool | Returns |
+|------|---------|
+| `get_production_history` | Latest month, 12m avg, YoY, trend |
+| `forecast_basin` | Prophet yhat, annual total, 80% CI, CAGR |
+| `get_kpi_snapshot` | Full KPI suite |
+| `compare_basins` | All 7 basins ranked + RPI |
+| `investigate_anomalies` | Z-score anomalies + event calendar |
 
-4. **VGM process facet for natural gas** — EIA natural gas endpoint returns multiple process types (marketed, dry, gross withdrawals). Added `facets[process][]=VGM` to isolate marketed volume. Not anticipated at planning time; discovered during data validation.
+---
 
-5. **Partial month detection** — EIA sometimes returns the current in-progress month with a partial (low) value. Added a heuristic: drop the last row if its value is less than 50% of the 6-month prior average. This prevents Prophet from treating an incomplete month as a genuine production drop.
+## Key Engineering Decisions
+
+| Decision | Why |
+|----------|-----|
+| `@st.fragment` on forecast chart | Slider reruns only the chart fragment, not full Prophet+compare |
+| `_pending_basin` two-rerun pattern | Avoids Streamlit widget key conflict on map click |
+| `_chat_pending` flag + get/del | Chat input stays visible; avoids session_state.pop() race |
+| `live_fetch=True` default | Streamlit Cloud has no pre-seeded Parquet files |
+| `cache_control: ephemeral` on system prompts | Cuts token cost on multi-turn loops |
+| fpdf2 latin-1 sanitisation | Helvetica only supports latin-1; em-dash crashes without sanitisation |
+| Arps bisection IRR | Bisection on [0,10] — reliable without scipy dependency |

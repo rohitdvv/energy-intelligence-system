@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Energy Intelligence System — Architecture</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0a1628; color: #e2e8f0; font-family: 'Segoe UI', system-ui, sans-serif; padding: 32px; }
+  h1 { text-align: center; font-size: 22px; color: #7dd3fc; margin-bottom: 6px; }
+  .subtitle { text-align: center; font-size: 13px; color: #64748b; margin-bottom: 36px; }
+
+  .diagram { display: flex; flex-direction: column; gap: 20px; max-width: 1100px; margin: 0 auto; }
+
+  .layer { display: flex; align-items: stretch; gap: 0; }
+  .layer-label {
+    writing-mode: vertical-rl; text-orientation: mixed; transform: rotate(180deg);
+    font-size: 11px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase;
+    color: #94a3b8; min-width: 36px; display: flex; align-items: center; justify-content: center;
+    border-right: 2px solid #1e3a5f; padding-right: 10px; margin-right: 16px;
+  }
+  .layer-content { flex: 1; display: flex; gap: 12px; flex-wrap: wrap; }
+
+  .box {
+    border-radius: 10px; padding: 14px 16px; font-size: 12px; line-height: 1.5;
+    border: 1px solid; flex: 1; min-width: 140px;
+  }
+  .box-title { font-weight: 700; font-size: 13px; margin-bottom: 4px; }
+  .box-sub { font-size: 11px; opacity: 0.7; }
+
+  .ext   { background: #0f2744; border-color: #1e4d8c; }
+  .data  { background: #0f2420; border-color: #166534; }
+  .ml    { background: #1a1040; border-color: #6d28d9; }
+  .ai    { background: #2a1020; border-color: #be185d; }
+  .ui    { background: #1a1a0a; border-color: #854d0e; }
+  .out   { background: #0a1a1a; border-color: #0e7490; }
+
+  .arrow-row {
+    display: flex; justify-content: center; align-items: center; gap: 60px;
+    padding: 0 52px; color: #334155; font-size: 20px;
+  }
+
+  .legend { display: flex; gap: 18px; justify-content: center; flex-wrap: wrap; margin-top: 28px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #94a3b8; }
+  .legend-dot { width: 12px; height: 12px; border-radius: 3px; border: 1px solid; }
+
+  .flow { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; padding: 10px 0; }
+  .flow-step {
+    background: #0f1e38; border: 1px solid #1e3a5f; border-radius: 8px;
+    padding: 8px 14px; font-size: 11px; color: #cbd5e1; white-space: nowrap;
+  }
+  .flow-arrow { color: #334155; font-size: 16px; }
+  .section-title { font-size: 13px; font-weight: 700; color: #7dd3fc; margin: 28px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #1e3a5f; }
+</style>
+</head>
+<body>
+
+<h1>Energy Intelligence System</h1>
+<p class="subtitle">Current Architecture — Hackathon Build · April 2026</p>
+
+<div class="diagram">
+
+  <!-- External Data Sources -->
+  <div class="layer">
+    <div class="layer-label">External</div>
+    <div class="layer-content">
+      <div class="box ext">
+        <div class="box-title">EIA Open Data API v2</div>
+        <div class="box-sub">Monthly production by basin<br>Oil: petroleum/crd/crpdn<br>Gas: natural-gas/prod/sum<br>WTI: petroleum/pri/spt</div>
+      </div>
+      <div class="box ext">
+        <div class="box-title">FRED API</div>
+        <div class="box-sub">Federal Reserve Economic Data<br>Series: WTISPLC<br>WTI crude spot price ($/bbl)</div>
+      </div>
+      <div class="box ext">
+        <div class="box-title">Anthropic API</div>
+        <div class="box-sub">claude-sonnet-4-6<br>Tool-use agentic loop<br>Multi-turn conversations</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-row">↓ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ↓ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ↓</div>
+
+  <!-- Data Layer -->
+  <div class="layer">
+    <div class="layer-label">Data</div>
+    <div class="layer-content">
+      <div class="box data">
+        <div class="box-title">EIA Client (eia.py)</div>
+        <div class="box-sub">Retry + backoff<br>VGM process filter for gas<br>Partial month detection</div>
+      </div>
+      <div class="box data">
+        <div class="box-title">FRED Client (fred.py)</div>
+        <div class="box-sub">WTI monthly average<br>BTU parity proxy for gas pricing</div>
+      </div>
+      <div class="box data">
+        <div class="box-title">Parquet Cache (loader.py)</div>
+        <div class="box-sub">data/raw/*.parquet<br>st.cache_data ttl=3600<br>Live-fetch on cache miss</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-row">↓ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ↓ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ↓</div>
+
+  <!-- ML + KPI Layer -->
+  <div class="layer">
+    <div class="layer-label">ML / KPI</div>
+    <div class="layer-content">
+      <div class="box ml">
+        <div class="box-title">Prophet Forecaster</div>
+        <div class="box-sub">Multiplicative seasonality<br>Changepoint prior 0.05<br>80% CI · Monthly "MS" resample<br>Held-out MAPE backtest</div>
+      </div>
+      <div class="box ml">
+        <div class="box-title">KPI Engine (metrics.py)</div>
+        <div class="box-sub">Projected Production<br>YoY Growth · CAGR<br>Volatility CV%<br>Revenue Potential · RPI</div>
+      </div>
+      <div class="box ml">
+        <div class="box-title">Well Economics</div>
+        <div class="box-sub">Arps hyperbolic decline<br>NPV at monthly resolution<br>IRR bisection [0,10]<br>Payback · EUR · Breakeven</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-row">↓ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ↓ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ↓</div>
+
+  <!-- AI Agent Layer -->
+  <div class="layer">
+    <div class="layer-label">AI Agents</div>
+    <div class="layer-content">
+      <div class="box ai">
+        <div class="box-title">Tool Registry (tools.py)</div>
+        <div class="box-sub">get_production_history<br>forecast_basin<br>get_kpi_snapshot<br>compare_basins<br>investigate_anomalies</div>
+      </div>
+      <div class="box ai">
+        <div class="box-title">Committee (3 Agents)</div>
+        <div class="box-sub">Riley Chen — Bull analyst<br>Marcus Webb — Bear analyst<br>Sarah Kim — PM verdict<br>PURSUE / WATCH / PASS</div>
+      </div>
+      <div class="box ai">
+        <div class="box-title">Chat Agent</div>
+        <div class="box-sub">Multi-turn agentic loop<br>Max 8 tool-use turns<br>[DATA] vs [INFERENCE] tags<br>Inline chart generation</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow-row">↓ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ↓ &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ↓</div>
+
+  <!-- UI Layer -->
+  <div class="layer">
+    <div class="layer-label">UI (7 Tabs)</div>
+    <div class="layer-content">
+      <div class="box ui" style="min-width:110px;flex:none;">
+        <div class="box-title">Overview</div>
+        <div class="box-sub">KPI cards<br>5 charts<br>Bubble matrix</div>
+      </div>
+      <div class="box ui" style="min-width:110px;flex:none;">
+        <div class="box-title">Forecast</div>
+        <div class="box-sub">Prophet chart<br>Anomaly overlay<br>Cutoff slider</div>
+      </div>
+      <div class="box ui" style="min-width:110px;flex:none;">
+        <div class="box-title">Map</div>
+        <div class="box-sub">Scattergeo<br>Choropleth<br>Click to select</div>
+      </div>
+      <div class="box ui" style="min-width:110px;flex:none;">
+        <div class="box-title">Chat</div>
+        <div class="box-sub">Multi-turn<br>Inline charts<br>Tool-grounded</div>
+      </div>
+      <div class="box ui" style="min-width:110px;flex:none;">
+        <div class="box-title">Committee</div>
+        <div class="box-sub">3-agent debate<br>Live status<br>Verdict chip</div>
+      </div>
+      <div class="box ui" style="min-width:110px;flex:none;">
+        <div class="box-title">Memo</div>
+        <div class="box-sub">Deal memo<br>PDF export<br>Verdict badge</div>
+      </div>
+      <div class="box ui" style="min-width:110px;flex:none;">
+        <div class="box-title">Economics</div>
+        <div class="box-sub">Arps curve<br>NPV / IRR<br>Cash flow chart</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Data flow section -->
+<div style="max-width:1100px;margin:0 auto;">
+  <div class="section-title">Key Data Flows</div>
+
+  <div style="font-size:11px;color:#64748b;margin-bottom:8px;">Map click → Basin update</div>
+  <div class="flow">
+    <div class="flow-step">User clicks map bubble</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step">_pending_basin set in session state</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step">st.rerun()</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step">Sidebar reads + applies _pending_basin</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step">All 7 tabs re-render</div>
+  </div>
+
+  <div style="font-size:11px;color:#64748b;margin:16px 0 8px;">Committee → PDF memo</div>
+  <div class="flow">
+    <div class="flow-step">Run Committee button</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step">3 agents × tool-use loop</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step">Result stored in session state</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step">Generate Deal Memo</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step">fpdf2 PDF bytes</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step">st.download_button</div>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:#0f2744;border-color:#1e4d8c;"></div> External APIs</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#0f2420;border-color:#166534;"></div> Data layer</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#1a1040;border-color:#6d28d9;"></div> ML / KPI</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#2a1020;border-color:#be185d;"></div> AI agents</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#1a1a0a;border-color:#854d0e;"></div> UI tabs</div>
+  </div>
+</div>
+
+</body>
+</html>

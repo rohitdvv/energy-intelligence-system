@@ -1,56 +1,83 @@
 # Reflection
 
-## What I Built
+## What Was Built
 
-**Completed features:**
+### All 7 Tabs
 
-- **Overview tab** — Four KPI metric cards (Projected Production, YoY Growth, Volatility CV%, Revenue Potential), a 7-basin comparison table with all KPIs, and an RPI bar chart with the selected basin highlighted. All data updates dynamically when the sidebar selections change.
+**Overview** — Four KPI metric cards (Projected Production, YoY Growth, Volatility CV%, Revenue Potential). 7-basin comparison table. Five charts: Multi-Dimension Radar, Production Ranking (lollipop), Revenue Potential bar, RPI Leaderboard, Growth vs Risk bubble matrix (BCG-style).
 
-- **Forecast tab** — Interactive Prophet chart with historical actuals, forecast line, 80% confidence interval band, and anomaly scatter overlay. The cutoff year slider uses `@st.fragment` so dragging it reruns only the chart block, not the full page. Hovering a red anomaly dot shows the date, z-score, and a known energy market event label (where catalogued).
+**Forecast** — Prophet chart with historical actuals, forecast line, 80% CI band, anomaly dots with callout arrows. Cutoff year slider using `@st.fragment` (only reruns the chart block, not the full page). Held-out MAPE displayed in methodology expander.
 
-- **Committee tab** — Three-agent investment committee: Bull analyst (Riley Chen), Bear analyst (Marcus Webb), and Portfolio Manager (Chair). Each agent calls live data tools (production history, forecast, KPI snapshot, compare basins, anomaly detection) before writing its thesis. The PM reads both theses and issues a structured `VERDICT / CONVICTION / RATIONALE / TOP_RISK / TOP_OPPORTUNITY` output. Results are shown with a trust panel (verdict chip, conviction badge, tool-call count, latency), collapsible agent sections, and tool-call summaries.
+**Map** — Interactive Plotly `go.Scattergeo` map with `go.Choropleth` state shading. Click any basin marker → sidebar + all tabs update to that basin. Metric overlay options: RPI score, projected production, YoY growth. KPI panel below map.
 
-- **Memo tab** — Template-driven investment deal memo generated from committee results. Includes basin statistics, agent summaries, PM verdict, and appendix. Downloadable as a Markdown file.
+**Chat** — Multi-turn conversational AI grounded in live EIA data. Agent calls tools before answering — responses tagged `[DATA]` (tool-backed) or `[INFERENCE]` (model estimate). Inline Plotly charts rendered next to responses when compare/forecast tools are called.
 
-- **Data layer** — EIA API v2 client (oil, gas, WTI) and FRED client with retry, exponential backoff, and Parquet caching. Live-fetch by default so the deployed app works without pre-seeded data files.
+**Committee** — Three-agent investment debate: Riley Chen (Bull), Marcus Webb (Bear), Sarah Kim (PM). Each agent runs a tool-use loop before writing their thesis. PM delivers structured PURSUE/WATCH/PASS verdict. Live streaming via `st.status` updates.
 
-- **Partial month detection** — Drops the latest EIA data point if it is less than 50% of the recent 6-month average, preventing Prophet from misreading an incomplete reporting month as a production crash.
+**Memo** — Deal memo assembled from committee results. Professional PDF download: header bar, metadata table, colour-coded verdict badge, rationale, risk/opportunity side-by-side, full agent arguments, process notes footer.
 
-- **Natural gas process filter** — Adds `facets[process][]=VGM` to EIA natural gas requests to return marketed production only, not gross withdrawals.
+**Economics** — Well-level profitability calculator. Arps hyperbolic decline curve with per-basin benchmark defaults. Outputs: EUR, NPV, IRR, payback period, breakeven price. Decline curve + cumulative cash flow dual chart.
 
-**Known limitations:**
-
-- Texas state proxy: EIA duoarea `STX` covers all Texas production. Permian and Eagle Ford both map to Texas, so their fetched volumes are identical (all-Texas) rather than basin-specific. This is documented in `eia.py`.
-- Revenue potential is gross at-wellhead; no deductions for royalties, opex, or differentials.
-- Prophet forecasts do not incorporate rig counts, completion activity, or commodity price signals — suitable for directional planning only.
+### Data & ML Layer
+- EIA API v2 with retry/backoff; partial month detection; VGM process filter for gas
+- FRED WTI price integration
+- Prophet multiplicative seasonality forecasting with 80% CI
+- XGBoost recursive forecaster built (lag features, rolling stats, cyclic calendar encoding) — retained in codebase but not shown in UI to keep chart clean
+- Held-out MAPE backtest for Prophet validation
 
 ---
 
-## What I'd Do Differently
+## What Would Be Done Differently
 
-1. **Basin-level granularity** — The largest data quality issue is the Texas proxy problem. I would add supplemental data from the Texas RRC API or NDIC (North Dakota) to get true basin-level production figures rather than state-level aggregates. This would make Permian vs. Eagle Ford a meaningful comparison instead of two identical series.
+**1. True basin-level production data**
+The biggest data quality issue: EIA duoarea `STX` is all of Texas, so Permian and Eagle Ford show the same numbers. Fix: integrate Texas RRC API or Enverus basin-level datasets for proper disaggregation. This is the single highest-impact improvement.
 
-2. **Sensitivity analysis** — A price × decline-rate heat map (Tier 2 stretch) would add significant analyst value. The KPI and forecast infrastructure is already in place; the missing piece is a Streamlit `st.experimental_data_editor` or Plotly `go.Heatmap` view driven by a grid of Prophet runs.
+**2. XGBoost as residual corrector, not standalone**
+The XGBoost model was built as an independent forecaster which caused long-horizon drift (900%+ YoY values). Better design: XGBoost models Prophet residuals. Prophet captures global trend + seasonality; XGBoost corrects local regime-specific patterns in the residuals. This ensemble would be more stable and more accurate.
 
-3. **Streaming agent responses** — The committee tab currently shows a spinner during each agent run and renders the full text when done. Using Anthropic's streaming API + `st.write_stream()` would let the user read the Bull's thesis as it is typed, improving perceived responsiveness.
+**3. Streaming committee responses**
+Currently each agent shows a spinner then dumps full text. Anthropic's streaming API + `st.write_stream()` would let users read the thesis as it's generated — dramatically better UX for a 30–60s operation.
 
-4. **Excel export** — The Tier 2 Excel integration (formula-driven workbook) would help bridge to downstream analyst workflows. `openpyxl` with named ranges for KPI inputs is straightforward to add but was cut to stay within the time budget.
+**4. Smaller model for tool dispatch**
+Bull and Bear agents make 4–8 tool calls each. These dispatch turns don't require deep reasoning. Using `claude-haiku-4-5` for tool-use turns and `claude-sonnet-4-6` only for the final thesis write-up would cut latency and cost by ~60%.
 
-5. **Smaller model for tool-use turns** — The Bull and Bear agents make 4–8 API calls each for data fetching. These tool-call turns don't require deep reasoning — a smaller, faster model (Claude Haiku) for tool dispatch with Sonnet only for the final thesis write-up would reduce latency and cost significantly.
+**5. Price × growth scenario heat map**
+A Plotly `go.Heatmap` showing NPV across a grid of (WTI price, growth rate) assumptions would be the highest-value output for an investment analyst. The KPI infrastructure is already in place — this is a presentation layer addition.
+
+**6. Conversation persistence**
+Chat history is lost on page refresh. Adding a lightweight SQLite store (or Streamlit's `st.experimental_connection`) for chat threads would make the tool genuinely useful across sessions.
 
 ---
 
 ## AI Tools Used
 
-**Claude Code (Anthropic)** — Used throughout the build for scaffolding, debugging, and iterative development. Specific contributions:
+**Claude Code (Anthropic)** — Used throughout for scaffolding, debugging, and all feature development. Key contributions:
 
-- Scaffolded the full project structure (all directories, config, .gitignore, requirements, .streamlit config) from a single spec prompt.
-- Wrote the EIA API v2 client including the list-of-tuples parameter convention required by the `requests` library for bracket-notation query params.
-- Designed the `ForecastResult` dataclass and `BasinForecaster` class, including the "MS" resampling fix that prevents Prophet from misinterpreting mixed date formats.
-- Wrote all six KPI functions and the `basin_kpi_summary` aggregator with the detrended CV% calculation.
-- Designed the tool-use loop in `committee.py`, including the `cache_control: ephemeral` system prompt pattern and the `parse_pm_verdict` parser.
-- Debugged the Plotly `add_vline` TypeError by identifying that Plotly 5.22+ requires Unix milliseconds (not ISO strings) for datetime axis annotations.
-- Diagnosed and fixed the Streamlit Cloud deployment issue (empty DataFrames) by changing all `live_fetch` defaults from `False` to `True`.
-- Wrote all system prompts for Bull, Bear, and PM agents including the citation rule and structured output format.
+- Full project structure from a single spec prompt
+- EIA API v2 client including list-of-tuples bracket-notation parameter convention
+- `ForecastResult` dataclass + `BasinForecaster` with MS resampling fix
+- All six KPI functions and `basin_kpi_summary` with detrended CV% calculation
+- Tool-use loop in `committee.py` with `cache_control: ephemeral` pattern
+- `parse_pm_verdict()` regex parser for structured agent output
+- All three agent system prompts with citation rules and structured output format
+- `_pending_basin` two-rerun pattern for map → sidebar sync
+- `_chat_pending` flag pattern for multi-turn chat without widget conflicts
+- XGBoost forecaster with recursive multi-step prediction and feature engineering
+- Arps decline curve + NPV/IRR bisection for well economics tab
+- fpdf2 PDF generator with latin-1 sanitisation
+- All Plotly chart builders: Scattergeo, Choropleth, Scatterpolar, bubble matrix
 
-All architecture decisions, KPI definitions, and domain logic (basin mappings, energy event calendar, VGM process code) were written collaboratively — Claude generated the code, I reviewed and directed each step.
+**All architecture decisions, domain logic (basin mappings, energy event calendar, VGM process code, Arps parameters), and KPI definitions** were directed by the developer; Claude implemented.
+
+---
+
+## Biggest Technical Challenges
+
+| Challenge | Root Cause | Fix |
+|-----------|-----------|-----|
+| Streamlit widget key conflict on map click | Writing to `st.session_state["basin"]` mid-render | `_pending_basin` intermediary key + two-rerun pattern |
+| Plotly `add_vline` TypeError | Plotly 5.22 requires Unix-ms for datetime axis, not ISO string | `.timestamp() * 1000` |
+| Multi-turn chat input disappearing | `st.session_state.pop()` unreliable; input re-rendered before state cleared | `get/del` pattern with `_chat_pending` flag |
+| XGBoost 900%+ YoY on long horizons | Recursive prediction error accumulation over 5-7 year horizons | Reverted to Prophet-only; XGBoost retained for future residual-correction ensemble |
+| PDF unicode crashes | fpdf2 Helvetica only supports latin-1; em-dash/bullets not supported | `_pdf()` sanitiser: replace common chars, then `encode('latin-1', errors='replace')` |
+| YoY fixed after cutoff year | `min(target_year, cutoff_year)` clamped to historical data only | Changed to use `y_forecast` values for both comparison years when target > cutoff |
