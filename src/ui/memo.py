@@ -1,11 +1,20 @@
 """Memo tab: generate and download a structured investment deal memo."""
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
+from typing import Any
 
 import streamlit as st
 
 from agents.committee import Committee
+
+
+def _clean(text: str | None) -> str:
+    """Strip markdown bold/italic markers that the AI sometimes wraps values in."""
+    if not text:
+        return ""
+    return re.sub(r"\*+", "", text).strip()
 
 _TEMPLATE = """\
 # Investment Deal Memo
@@ -85,17 +94,157 @@ def _generate_memo(debate_result: dict) -> str:
         target_year=meta["target_year"],
         wti=meta["wti_assumption"],
         date=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-        verdict=verdict.get("verdict") or "N/A",
-        conviction=verdict.get("conviction") or "N/A",
-        rationale=verdict.get("rationale") or "_No rationale provided._",
-        top_opportunity=verdict.get("top_opportunity") or "N/A",
-        top_risk=verdict.get("top_risk") or "N/A",
+        verdict=_clean(verdict.get("verdict")) or "N/A",
+        conviction=_clean(verdict.get("conviction")) or "N/A",
+        rationale=_clean(verdict.get("rationale")) or "_No rationale provided._",
+        top_opportunity=_clean(verdict.get("top_opportunity")) or "N/A",
+        top_risk=_clean(verdict.get("top_risk")) or "N/A",
         bull_text=debate_result["bull"]["text_response"],
         bear_text=debate_result["bear"]["text_response"],
         pm_text=pm_text,
         total_tool_calls=meta.get("total_tool_calls", "N/A"),
         latency_seconds=meta.get("latency_seconds", "N/A"),
     )
+
+
+def _generate_pdf_bytes(debate_result: dict[str, Any]) -> bytes:
+    """Build a professional PDF deal memo and return raw bytes."""
+    from fpdf import FPDF  # lazy import — optional dependency
+
+    meta    = debate_result["metadata"]
+    pm_text = debate_result["pm"]["text_response"]
+    verdict_raw = Committee.parse_pm_verdict(pm_text)
+
+    basin       = meta["basin"]
+    fuel        = meta["fuel_type"].upper()
+    target_year = meta["target_year"]
+    wti         = meta["wti_assumption"]
+    date_str    = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    verdict_val     = _clean(verdict_raw.get("verdict")) or "N/A"
+    conviction_val  = _clean(verdict_raw.get("conviction")) or "N/A"
+    rationale_val   = _clean(verdict_raw.get("rationale")) or "No rationale provided."
+    top_risk_val    = _clean(verdict_raw.get("top_risk")) or "N/A"
+    top_opp_val     = _clean(verdict_raw.get("top_opportunity")) or "N/A"
+
+    # Verdict badge colour
+    vc = verdict_val.upper()
+    if "PURSUE" in vc:
+        badge_r, badge_g, badge_b = 39, 174, 96
+    elif "PASS" in vc:
+        badge_r, badge_g, badge_b = 192, 57, 43
+    else:  # WATCH / unknown
+        badge_r, badge_g, badge_b = 211, 84, 0
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=18)
+    pdf.add_page()
+
+    # ── Header bar ──────────────────────────────────────────────────────────
+    pdf.set_fill_color(10, 20, 40)
+    pdf.rect(0, 0, 210, 22, "F")
+    pdf.set_font("Helvetica", "B", 14)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_xy(10, 5)
+    pdf.cell(0, 12, "ENERGY INTELLIGENCE SYSTEM — INVESTMENT DEAL MEMO", ln=True)
+    pdf.set_text_color(0, 0, 0)
+    pdf.ln(4)
+
+    # ── Metadata table ───────────────────────────────────────────────────────
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.set_fill_color(230, 235, 245)
+    col_w = [52, 130]
+    rows = [
+        ("Basin", basin),
+        ("Fuel type", fuel),
+        ("Target year", str(target_year)),
+        ("WTI assumption", f"${wti}/bbl"),
+        ("Generated", date_str),
+    ]
+    for label, value in rows:
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_fill_color(230, 235, 245)
+        pdf.cell(col_w[0], 7, label, border=1, fill=True)
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_fill_color(255, 255, 255)
+        pdf.cell(col_w[1], 7, value, border=1, fill=True, ln=True)
+    pdf.ln(6)
+
+    # ── Verdict badge ────────────────────────────────────────────────────────
+    pdf.set_fill_color(badge_r, badge_g, badge_b)
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.cell(0, 12, f"  VERDICT: {verdict_val}  |  CONVICTION: {conviction_val}", fill=True, ln=True)
+    pdf.set_text_color(0, 0, 0)
+    pdf.ln(4)
+
+    def _section(title: str, body: str) -> None:
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_fill_color(10, 20, 40)
+        pdf.set_text_color(255, 255, 255)
+        pdf.cell(0, 8, f"  {title}", fill=True, ln=True)
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_font("Helvetica", "", 9)
+        pdf.ln(2)
+        # Strip markdown, write multi-line
+        clean_body = re.sub(r"\*{1,2}([^*]+)\*{1,2}", r"\1", body)
+        clean_body = re.sub(r"#{1,6}\s*", "", clean_body)
+        pdf.multi_cell(0, 5, clean_body.strip())
+        pdf.ln(4)
+
+    _section("RATIONALE", rationale_val)
+
+    # Risk / Opportunity row
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_fill_color(245, 245, 220)
+    pdf.cell(95, 7, "  TOP OPPORTUNITY", border=1, fill=True)
+    pdf.cell(95, 7, "  TOP RISK", border=1, fill=True, ln=True)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_fill_color(255, 255, 255)
+    # Use multi_cell workaround for two side-by-side cells with wrap
+    x = pdf.get_x()
+    y = pdf.get_y()
+    pdf.multi_cell(95, 5, f"  {top_opp_val}", border=1)
+    h1 = pdf.get_y() - y
+    pdf.set_xy(x + 95, y)
+    pdf.multi_cell(95, 5, f"  {top_risk_val}", border=1)
+    h2 = pdf.get_y() - y
+    pdf.set_y(y + max(h1, h2))
+    pdf.ln(6)
+
+    _section("BULL CASE — Riley Chen (Growth Analyst)", debate_result["bull"]["text_response"])
+    _section("BEAR CASE — Marcus Webb (Risk Manager)", debate_result["bear"]["text_response"])
+    _section("PM DELIBERATION", pm_text)
+
+    # ── Process notes footer ─────────────────────────────────────────────────
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_fill_color(230, 235, 245)
+    pdf.cell(0, 7, "  PROCESS NOTES", fill=True, ln=True)
+    pdf.set_font("Helvetica", "", 8)
+    notes = [
+        ("Data sources", "EIA Open Data API v2 · FRED WTISPLC"),
+        ("Forecasting model", "Facebook Prophet — multiplicative seasonality · 80% CI"),
+        ("Tool calls executed", str(meta.get("total_tool_calls", "N/A"))),
+        ("Analysis duration", f"{meta.get('latency_seconds', 'N/A')}s"),
+    ]
+    for label, value in notes:
+        pdf.set_font("Helvetica", "B", 8)
+        pdf.cell(55, 6, label, border=1)
+        pdf.set_font("Helvetica", "", 8)
+        pdf.cell(0, 6, value, border=1, ln=True)
+
+    pdf.ln(4)
+    pdf.set_font("Helvetica", "I", 7)
+    pdf.set_text_color(120, 120, 120)
+    pdf.multi_cell(
+        0, 4,
+        "This memo was generated by the Energy Intelligence System. All production figures are "
+        "sourced from public EIA / FRED data. Forecasts are directional guidance only and do not "
+        "constitute a reserve study or formal investment recommendation. Independent verification "
+        "is required before capital allocation.",
+    )
+
+    return bytes(pdf.output())
 
 
 def render_memo(basin: str, fuel_type: str, target_year: int) -> None:
@@ -132,18 +281,29 @@ def render_memo(basin: str, fuel_type: str, target_year: int) -> None:
     memo_md: str | None = st.session_state.get(memo_key)
 
     if memo_md:
-        filename = (
+        pdf_key = f"pdf_{basin}_{fuel_type}_{target_year}"
+        if pdf_key not in st.session_state and debate_result is not None:
+            try:
+                st.session_state[pdf_key] = _generate_pdf_bytes(debate_result)
+            except Exception:
+                st.session_state[pdf_key] = None
+
+        pdf_bytes = st.session_state.get(pdf_key)
+        pdf_filename = (
             f"{basin.lower().replace(' ', '_')}_"
-            f"{fuel_type}_{target_year}_deal_memo.md"
+            f"{fuel_type}_{target_year}_deal_memo.pdf"
         )
         with col_dl:
-            st.download_button(
-                "⬇️ Download (.md)",
-                data=memo_md,
-                file_name=filename,
-                mime="text/markdown",
-                use_container_width=True,
-            )
+            if pdf_bytes:
+                st.download_button(
+                    "⬇️ Download PDF",
+                    data=pdf_bytes,
+                    file_name=pdf_filename,
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+            else:
+                st.caption("PDF unavailable — install `fpdf2`")
 
         st.divider()
         st.markdown(memo_md)
