@@ -236,11 +236,10 @@ def _render_revenue_bar(
         hovertemplate="<b>%{y}</b><br>$%{x:,.0f}M/yr<extra></extra>",
     ))
     fig.update_layout(
-        **_LAYOUT,
+        **{**_LAYOUT, "margin": dict(t=10, b=20, l=10, r=80)},
         height=300,
         xaxis=dict(title="$M / year", gridcolor="rgba(255,255,255,.08)", zeroline=False),
         yaxis=dict(tickfont=dict(size=11)),
-        margin=dict(t=10, b=20, l=10, r=80),
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -280,11 +279,10 @@ def _render_rpi_bar(
         annotation_font_color="rgba(255,255,255,0.5)",
     )
     fig.update_layout(
-        **_LAYOUT,
+        **{**_LAYOUT, "margin": dict(t=10, b=20, l=10, r=10)},
         height=300,
         xaxis=dict(tickfont=dict(size=10)),
         yaxis=dict(range=[0, 110], title="RPI Score", gridcolor="rgba(255,255,255,.08)"),
-        margin=dict(t=10, b=20, l=10, r=10),
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -353,7 +351,7 @@ def _render_bubble(
         ))
 
     fig.update_layout(
-        **_LAYOUT,
+        **{**_LAYOUT, "margin": dict(t=20, b=40, l=20, r=20)},
         height=400,
         xaxis=dict(
             title="Revenue Potential ($M / month)",
@@ -366,7 +364,6 @@ def _render_bubble(
             zeroline=True,
             zerolinecolor="rgba(255,255,255,.2)",
         ),
-        margin=dict(t=20, b=40, l=20, r=20),
     )
     st.plotly_chart(fig, use_container_width=True)
 
