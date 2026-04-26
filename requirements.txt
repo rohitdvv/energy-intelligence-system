@@ -11,3 +11,4 @@ python-dotenv==1.0.1
 duckdb==0.10.3
 cmdstanpy<1.2.0
 fpdf2>=2.7.9
+xgboost>=2.0.0
