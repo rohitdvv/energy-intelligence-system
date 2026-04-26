@@ -1,7 +1,10 @@
 """Overview tab: KPI metric cards, basin comparison table, RPI bar chart."""
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
+
+_NOW_YEAR = datetime.now().year
 
 import numpy as np
 import pandas as pd
@@ -241,16 +244,23 @@ def render_overview(basin: str, fuel_type: str, target_year: int, wti: float) ->
             if yoy_year is not None
             else "Year-over-year % change in annual production"
         )
+        cutoff_year = int(kpi.get("projected_production", {}).get("year", target_year)) if kpi else target_year
+        is_forecast_yoy = yoy_year is not None and yoy_year > _NOW_YEAR
         yoy_label = (
             f"YoY Growth ({yoy_year} vs {yoy_year - 1})"
             if yoy_year is not None
             else "YoY Growth"
         )
+        yoy_help = (
+            f"Forecast-based: Prophet {yoy_year} vs {yoy_year - 1} projections."
+            if is_forecast_yoy
+            else f"Actual EIA data: {yoy_year} vs {yoy_year - 1}."
+        ) if yoy_year else "Year-over-year % change"
         c2.metric(
             yoy_label,
             f"{yoy:+.1f}%" if yoy is not None else "N/A",
             delta=f"{yoy:.1f}%" if yoy is not None else None,
-            help="Based on the most recent full calendar year of actual EIA data — not a forecast figure.",
+            help=yoy_help,
         )
 
         cv = vol.get("cv_pct")

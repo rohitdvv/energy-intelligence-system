@@ -242,8 +242,17 @@ def basin_kpi_summary(
     """
     historical_df = result.historical[["ds", "y_actual"]].rename(columns={"y_actual": "y"})
 
+    # Build a unified series: actuals for historical rows, y_forecast for future rows.
+    # This lets production_growth_rate compute a meaningful forecast-based YoY when
+    # target_year exceeds the data cutoff (e.g. comparing 2028 forecast vs 2027 forecast).
+    combined = result.df[["ds", "y_actual", "y_forecast", "is_forecast"]].copy()
+    combined["y"] = combined.apply(
+        lambda r: r["y_forecast"] if r["is_forecast"] else r["y_actual"], axis=1
+    )
+    combined_df = combined[["ds", "y"]].dropna(subset=["y"])
+
     ppe = projected_production_estimate(result, target_year)
-    pgr = production_growth_rate(historical_df, min(target_year, result.cutoff_year))
+    pgr = production_growth_rate(combined_df, target_year)
     pdr = production_decline_rate(historical_df)
     vs = volatility_score(historical_df)
 
