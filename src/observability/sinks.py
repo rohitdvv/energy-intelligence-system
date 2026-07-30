@@ -1,9 +1,12 @@
 """Telemetry sinks — where Events go once recorded.
 
-Three implementations, all optional and fail-open:
+Implementations, all optional and fail-open:
 
   MemorySink   — bounded in-process ring buffer that feeds the in-app
                  Observatory dashboard (this is "option 1", always on).
+  DuckDBSink   — persists events to a DuckDB file so history survives the
+                 in-memory buffer cap and (with a durable path) restarts.
+                 Opt-in via OBS_DUCKDB_PATH; reuses the existing duckdb dep.
   LoggingSink  — one structured JSON line per event via the stdlib logger,
                  so events show up in Streamlit Cloud / container logs.
   OTLPSink     — OpenTelemetry OTLP exporter (the "option 2" external seam).
@@ -14,6 +17,7 @@ A Sink must never raise into the caller: emit() swallows and logs.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
@@ -58,6 +62,118 @@ class MemorySink:
     def clear(self) -> None:
         with self._lock:
             self._buf.clear()
+
+
+# ----------------------------------------------------------------------
+# DuckDB persistence (survives the in-memory cap; durable with a real path)
+# ----------------------------------------------------------------------
+
+class DuckDBSink:
+    """Persist events to a DuckDB table.
+
+    Opt-in: set OBS_DUCKDB_PATH to a file path (e.g. ``data/telemetry.duckdb``)
+    or ``:memory:``. Inert when unset, so nothing is written unless asked.
+
+    Note on Streamlit Cloud: its filesystem is ephemeral, so a file path there
+    persists across the in-memory buffer cap and script reruns, but not across
+    a full app reboot. Point OBS_DUCKDB_PATH at a mounted volume or use an
+    external DB for true long-term retention.
+    """
+
+    _DDL = """
+        CREATE TABLE IF NOT EXISTS events (
+            ts          DOUBLE,
+            category    VARCHAR,
+            name        VARCHAR,
+            duration_ms DOUBLE,
+            success     BOOLEAN,
+            error       VARCHAR,
+            attributes  VARCHAR
+        )
+    """
+
+    def __init__(self) -> None:
+        self._conn = None
+        self._lock = threading.Lock()
+        self.path = os.environ.get("OBS_DUCKDB_PATH", "")
+        if not self.path:
+            return
+        try:
+            import duckdb
+
+            # Ensure the parent directory exists for file-backed stores.
+            if self.path not in (":memory:", "") and os.path.dirname(self.path):
+                os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            self._conn = duckdb.connect(self.path)
+            self._conn.execute(self._DDL)
+            logger.info("DuckDBSink active → %s", self.path)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("DuckDBSink disabled (%s): %s", self.path, exc)
+            self._conn = None
+
+    @property
+    def active(self) -> bool:
+        return self._conn is not None
+
+    def emit(self, event: "Event") -> None:
+        if self._conn is None:
+            return
+        try:
+            with self._lock:
+                self._conn.execute(
+                    "INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        event.ts,
+                        event.category,
+                        event.name,
+                        event.duration_ms,
+                        event.success,
+                        event.error,
+                        json.dumps(event.attributes, default=str),
+                    ],
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("DuckDBSink emit failed: %s", exc)
+
+    def events(self, limit: int = 5000) -> list["Event"]:
+        """Return the most recent *limit* events, oldest-first."""
+        if self._conn is None:
+            return []
+        from observability.core import Event  # local import avoids import cycle
+
+        try:
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT ts, category, name, duration_ms, success, error, "
+                    "attributes FROM events ORDER BY ts DESC LIMIT ?",
+                    [limit],
+                ).fetchall()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("DuckDBSink read failed: %s", exc)
+            return []
+
+        out: list[Event] = []
+        for ts, category, name, dur, success, error, attrs in reversed(rows):
+            try:
+                parsed = json.loads(attrs) if attrs else {}
+            except Exception:  # noqa: BLE001
+                parsed = {}
+            out.append(
+                Event(
+                    ts=ts, category=category, name=name, duration_ms=dur,
+                    success=bool(success), error=error, attributes=parsed,
+                )
+            )
+        return out
+
+    def clear(self) -> None:
+        if self._conn is None:
+            return
+        try:
+            with self._lock:
+                self._conn.execute("DELETE FROM events")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("DuckDBSink clear failed: %s", exc)
 
 
 # ----------------------------------------------------------------------

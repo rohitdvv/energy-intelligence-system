@@ -237,8 +237,10 @@ def render_observatory() -> None:
         )
     with head_r:
         ext = "🟢 connected" if tel.external_active else "⚪ local only"
+        store = "🟢 DuckDB" if tel.persistent_active else "🧠 in-memory"
         st.metric("External export (OTLP)", ext)
-        if st.button("Clear buffer", use_container_width=True):
+        st.metric("Store", store, help=tel.persistent_path or "OBS_DUCKDB_PATH unset")
+        if st.button("Clear history", use_container_width=True):
             tel.clear()
             st.rerun()
 
@@ -258,8 +260,8 @@ def render_observatory() -> None:
     _recent_and_errors(df)
 
     st.caption(
-        "Buffer holds the most recent 5,000 events in-process. "
-        "Set `OTEL_EXPORTER_OTLP_ENDPOINT` (and install the optional "
-        "`opentelemetry` extras) to also stream to Grafana / Datadog / any "
-        "OTLP collector."
+        "In-memory buffer holds the most recent 5,000 events per process. "
+        "Set `OBS_DUCKDB_PATH` to persist history to DuckDB, and "
+        "`OTEL_EXPORTER_OTLP_ENDPOINT` (+ the optional `opentelemetry` extras) "
+        "to also stream to Grafana / Datadog / any OTLP collector."
     )

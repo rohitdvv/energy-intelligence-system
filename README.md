@@ -18,12 +18,33 @@ See [`problem_statement.md`](./problem_statement.md) for the full brief.
 ├── planning/
 │   └── PLANNING.md         # Your planning document (fill this out first)
 ├── src/                    # Your application code goes here
+├── src/observability/      # Telemetry layer feeding the Observatory tab
 └── docs/
     ├── walkthrough.md      # Link to your 5-minute walkthrough video
     ├── architecture.md     # Your architecture overview and data flow
     ├── kpi_definitions.md  # Definitions and logic for each KPI you built
+    ├── observability.md    # Observatory telemetry design + how to instrument
     └── reflection.md       # What you built, tradeoffs, AI tools used
 ```
+
+---
+
+## 🔭 Observatory — built-in observability
+
+The app ships with an **Observatory** tab that monitors the system's two runtime
+hotspots in real time — the **Claude committee/chat agents** and the **external
+data APIs** (EIA · FRED · BSEE):
+
+- **Cost & tokens** — per-agent Claude spend (USD), token usage, cumulative trend
+- **Latency & retries** — response-time distributions and rate-limit/5xx retries
+- **API health** — calls, error rates, status codes and latency per source
+- **Tool usage** — call counts, latency and error rate for each agent tool
+- **Error feed + event log** — the most recent failures and raw events
+
+It's **fail-open** (telemetry never breaks the app) and needs no setup. Optional
+env vars enable more: `OBS_DUCKDB_PATH` persists history to DuckDB, and
+`OTEL_EXPORTER_OTLP_ENDPOINT` streams to any OpenTelemetry collector (Grafana,
+Datadog, …). See [`docs/observability.md`](./docs/observability.md).
 
 ---
 

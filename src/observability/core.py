@@ -35,7 +35,13 @@ from contextlib import contextmanager
 import json
 
 from observability.pricing import cost_usd
-from observability.sinks import LoggingSink, MemorySink, MultiSink, OTLPSink
+from observability.sinks import (
+    DuckDBSink,
+    LoggingSink,
+    MemorySink,
+    MultiSink,
+    OTLPSink,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +78,11 @@ class Telemetry:
 
     def __init__(self) -> None:
         self._memory = MemorySink()
+        self._duckdb = DuckDBSink()
         self._otlp = OTLPSink()
-        self._sink = MultiSink([self._memory, LoggingSink(), self._otlp])
+        self._sink = MultiSink(
+            [self._memory, self._duckdb, LoggingSink(), self._otlp]
+        )
         self._lock = threading.Lock()
         self._counter = 0
 
@@ -91,15 +100,34 @@ class Telemetry:
     # -- read (for the dashboard) --------------------------------------
 
     def events(self) -> list[Event]:
+        """Return events for the dashboard.
+
+        Prefers the persistent DuckDB store when active (fuller history that
+        survives the in-memory cap); otherwise the in-memory ring buffer.
+        """
+        if self._duckdb.active:
+            events = self._duckdb.events()
+            if events:
+                return events
         return self._memory.events()
 
     def clear(self) -> None:
         self._memory.clear()
+        self._duckdb.clear()
 
     @property
     def external_active(self) -> bool:
         """True when the OTLP exporter is live (external stack connected)."""
         return getattr(self._otlp, "active", False)
+
+    @property
+    def persistent_active(self) -> bool:
+        """True when the DuckDB persistence sink is active."""
+        return getattr(self._duckdb, "active", False)
+
+    @property
+    def persistent_path(self) -> str:
+        return getattr(self._duckdb, "path", "") or ""
 
     @property
     def total_recorded(self) -> int:

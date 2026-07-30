@@ -237,3 +237,46 @@ User prompt → Claude API (tools=TOOL_SPECS)
 | `cache_control: ephemeral` on system prompts | Cuts token cost on multi-turn loops |
 | fpdf2 latin-1 sanitisation | Helvetica only supports latin-1; em-dash crashes without sanitisation |
 | Arps bisection IRR | Bisection on [0,10] — reliable without scipy dependency |
+
+---
+
+## Observability Layer (Observatory)
+
+A fail-open telemetry layer instruments the two runtime hotspots — the Claude
+agents and the external data APIs — and surfaces them in the **🔭 Observatory**
+tab. Full design in [`observability.md`](./observability.md).
+
+```
+  ┌──────────────── instrumented call sites ────────────────┐
+  │  committee._create / debate  →  per-agent LLM spans      │
+  │  chat_agent.respond          →  tokens · cost · latency  │
+  │  execute_tool                →  tool latency · errors    │
+  │  eia._get / fred._get        →  status · retries · ms    │
+  │  bsee.fetch_gom_production   →  api-vs-static fallback    │
+  └───────────────────────────┬─────────────────────────────┘
+                              │  span() / record_llm()
+                              ▼
+                  observability.Telemetry  (process singleton)
+                              │  MultiSink fan-out (fail-open)
+        ┌──────────────┬──────┴───────┬────────────────┐
+        ▼              ▼              ▼                ▼
+   MemorySink     DuckDBSink      LoggingSink       OTLPSink
+   (dashboard)  (OBS_DUCKDB_PATH) (JSON logs)   (OTEL_..._ENDPOINT)
+        │
+        ▼
+   🔭 Observatory tab  (Plotly: cost · tokens · latency · errors)
+```
+
+| Concern | Captured |
+|---------|----------|
+| LLM cost | input/output/cache tokens → USD, per agent (Bull/Bear/PM/Chat) |
+| LLM reliability | latency distribution, retries (rate-limit / 5xx), stop reason |
+| API health | source, status code, retries, latency, static-fallback usage |
+| Tools | per-tool call count, latency, error rate |
+
+| Decision | Why |
+|----------|-----|
+| Process-global singleton (not `@st.cache_resource`) | Survives Streamlit script reruns without a widget/session dependency |
+| In-memory ring buffer default | Zero-config dashboard; no external service required for the demo |
+| DuckDB / OTLP as opt-in sinks | Persistence and external export without adding hard dependencies |
+| Fail-open recording | Instrumentation can never take down the analysis app |
