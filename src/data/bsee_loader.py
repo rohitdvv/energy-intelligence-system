@@ -29,6 +29,8 @@ from functools import lru_cache
 
 import pandas as pd
 
+from observability import span
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -75,35 +77,42 @@ def fetch_gom_production(year: int | None = None) -> dict:
 
     target_year = year or max(_BSEE_STATIC.keys())
 
-    try:
-        # BSEE OData production endpoint — annual summary by year
-        # OData filter spaces must be URL-encoded
-        odata_filter = f"year(productiondate)%20eq%20{target_year}"
-        url = (
-            f"{_BSEE_API_BASE}/Production/production"
-            f"?$filter={odata_filter}"
-            f"&$select=productiondate,oilprod,gasprod"
-            f"&$top=5000"
-            f"&$format=json"
-        )
-        req = urllib.request.Request(url, headers={"User-Agent": "EnergyIntelligenceSystem/1.0"})
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.loads(resp.read())
+    with span("api", "bsee.fetch_gom_production", source="bsee", year=target_year) as sp:
+        try:
+            # BSEE OData production endpoint — annual summary by year
+            # OData filter spaces must be URL-encoded
+            odata_filter = f"year(productiondate)%20eq%20{target_year}"
+            url = (
+                f"{_BSEE_API_BASE}/Production/production"
+                f"?$filter={odata_filter}"
+                f"&$select=productiondate,oilprod,gasprod"
+                f"&$top=5000"
+                f"&$format=json"
+            )
+            req = urllib.request.Request(url, headers={"User-Agent": "EnergyIntelligenceSystem/1.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read())
 
-        records = data.get("value", [])
-        if records:
-            oil_total = sum(float(r.get("oilprod") or 0) for r in records)
-            gas_total = sum(float(r.get("gasprod") or 0) for r in records)
-            return {
-                "source":       "bsee_api",
-                "year":         target_year,
-                "oil_mbbls":    round(oil_total),
-                "gas_mmcf":     round(gas_total),
-                "active_wells": _BSEE_STATIC.get(target_year, {}).get("active_wells", "N/A"),
-                "area":         "Gulf of Mexico (Federal OCS)",
-            }
-    except Exception as exc:
-        logger.warning("BSEE API unavailable (%s) — using static fallback", exc)
+            records = data.get("value", [])
+            if records:
+                oil_total = sum(float(r.get("oilprod") or 0) for r in records)
+                gas_total = sum(float(r.get("gasprod") or 0) for r in records)
+                sp["result_source"] = "bsee_api"
+                sp["rows"] = len(records)
+                return {
+                    "source":       "bsee_api",
+                    "year":         target_year,
+                    "oil_mbbls":    round(oil_total),
+                    "gas_mmcf":     round(gas_total),
+                    "active_wells": _BSEE_STATIC.get(target_year, {}).get("active_wells", "N/A"),
+                    "area":         "Gulf of Mexico (Federal OCS)",
+                }
+            sp["result_source"] = "bsee_static"
+            sp["fallback"] = "empty_response"
+        except Exception as exc:
+            logger.warning("BSEE API unavailable (%s) — using static fallback", exc)
+            sp["result_source"] = "bsee_static"
+            sp["fallback"] = f"{type(exc).__name__}"
 
     # Static fallback
     rec = _BSEE_STATIC.get(target_year, _BSEE_STATIC[max(_BSEE_STATIC.keys())])

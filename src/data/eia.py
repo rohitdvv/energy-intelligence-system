@@ -21,6 +21,7 @@ import pandas as pd
 import requests
 
 from config import get_eia_key
+from observability import span
 
 logger = logging.getLogger(__name__)
 
@@ -90,26 +91,30 @@ class EIAClient:
         url = f"{_BASE_URL}/{route}"
         full_params: list[tuple[str, str]] = [("api_key", self._api_key)] + params
 
-        last_exc: Exception = RuntimeError("no attempts made")
-        for attempt in range(1, _MAX_RETRIES + 1):
-            try:
-                resp = self._session.get(url, params=full_params, timeout=30)
-                resp.raise_for_status()
-                payload: dict[str, Any] = resp.json()
-                if "error" in payload:
-                    raise ValueError(f"EIA API error: {payload['error']}")
-                return payload
-            except (requests.RequestException, ValueError) as exc:
-                last_exc = exc
-                if attempt == _MAX_RETRIES:
-                    break
-                wait = _BACKOFF_BASE ** attempt
-                logger.warning(
-                    "EIA request failed (attempt %d/%d): %s — retrying in %ds",
-                    attempt, _MAX_RETRIES, exc, wait,
-                )
-                time.sleep(wait)
-        raise last_exc
+        with span("api", "eia._get", source="eia", route=route) as sp:
+            last_exc: Exception = RuntimeError("no attempts made")
+            for attempt in range(1, _MAX_RETRIES + 1):
+                try:
+                    resp = self._session.get(url, params=full_params, timeout=30)
+                    sp["status_code"] = resp.status_code
+                    resp.raise_for_status()
+                    payload: dict[str, Any] = resp.json()
+                    if "error" in payload:
+                        raise ValueError(f"EIA API error: {payload['error']}")
+                    sp["retries"] = attempt - 1
+                    return payload
+                except (requests.RequestException, ValueError) as exc:
+                    last_exc = exc
+                    if attempt == _MAX_RETRIES:
+                        break
+                    wait = _BACKOFF_BASE ** attempt
+                    logger.warning(
+                        "EIA request failed (attempt %d/%d): %s — retrying in %ds",
+                        attempt, _MAX_RETRIES, exc, wait,
+                    )
+                    time.sleep(wait)
+            sp["retries"] = _MAX_RETRIES
+            raise last_exc
 
     def _fetch_production(
         self,

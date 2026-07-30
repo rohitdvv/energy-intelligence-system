@@ -21,6 +21,7 @@ from data.loader import load_production_no_cache
 from data.usgs_loader import get_resource_assessment, resource_adequacy_years
 from kpi.metrics import basin_kpi_summary, relative_performance_index
 from models.forecaster import forecast_basin as _fit_and_forecast
+from observability import span
 
 logger = logging.getLogger(__name__)
 
@@ -515,8 +516,14 @@ def execute_tool(name: str, input_dict: dict[str, Any]) -> dict[str, Any]:
     executor = TOOL_EXECUTORS.get(name)
     if executor is None:
         return {"error": f"Unknown tool: {name!r}"}
+    # Instrument tool latency + error rate. The span records success=False and
+    # re-raises on error; we catch below so the contract (never raises) holds.
     try:
-        return executor(input_dict)
+        with span("tool", name, basin=input_dict.get("basin")) as sp:
+            result = executor(input_dict)
+            sp["result_keys"] = len(result) if isinstance(result, dict) else 0
+            sp["tool_error"] = bool(isinstance(result, dict) and "error" in result)
+            return result
     except Exception as exc:
         logger.warning("Tool '%s' raised: %s", name, exc, exc_info=True)
         return {"error": str(exc), "tool": name}

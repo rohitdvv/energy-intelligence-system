@@ -101,6 +101,7 @@ from ui.economics import render_economics
 from ui.forecast import render_forecast
 from ui.map import render_map
 from ui.memo import render_memo
+from ui.observatory import render_observatory
 from ui.overview import render_overview
 
 
@@ -187,7 +188,9 @@ def main() -> None:
         f"Target year **{target_year}** · WTI **${wti:.0f}/bbl**"
     )
 
-    tab_ov, tab_fc, tab_map, tab_chat, tab_co, tab_me, tab_econ = st.tabs(
+    (
+        tab_ov, tab_fc, tab_map, tab_chat, tab_co, tab_me, tab_econ, tab_obs
+    ) = st.tabs(
         [
             "📊 Overview",
             "📈 Forecast",
@@ -196,6 +199,7 @@ def main() -> None:
             "🏛️ Committee",
             "📄 Memo",
             "💰 Economics",
+            "🔭 Observatory",
         ]
     )
 
@@ -219,6 +223,9 @@ def main() -> None:
 
     with tab_econ:
         render_economics(basin, fuel_type, wti)
+
+    with tab_obs:
+        render_observatory()
 
 
 if __name__ == "__main__":

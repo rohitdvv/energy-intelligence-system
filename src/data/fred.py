@@ -14,6 +14,7 @@ import pandas as pd
 import requests
 
 from config import get_fred_key
+from observability import span
 
 logger = logging.getLogger(__name__)
 
@@ -41,23 +42,27 @@ class FREDClient:
         url = f"{_BASE_URL}/{endpoint}"
         full_params = {**params, "api_key": self._api_key, "file_type": "json"}
 
-        last_exc: Exception = RuntimeError("no attempts made")
-        for attempt in range(1, _MAX_RETRIES + 1):
-            try:
-                resp = self._session.get(url, params=full_params, timeout=30)
-                resp.raise_for_status()
-                return resp.json()  # type: ignore[no-any-return]
-            except requests.RequestException as exc:
-                last_exc = exc
-                if attempt == _MAX_RETRIES:
-                    break
-                wait = _BACKOFF_BASE ** attempt
-                logger.warning(
-                    "FRED request failed (attempt %d/%d): %s — retrying in %ds",
-                    attempt, _MAX_RETRIES, exc, wait,
-                )
-                time.sleep(wait)
-        raise last_exc
+        with span("api", "fred._get", source="fred", endpoint=endpoint) as sp:
+            last_exc: Exception = RuntimeError("no attempts made")
+            for attempt in range(1, _MAX_RETRIES + 1):
+                try:
+                    resp = self._session.get(url, params=full_params, timeout=30)
+                    sp["status_code"] = resp.status_code
+                    resp.raise_for_status()
+                    sp["retries"] = attempt - 1
+                    return resp.json()  # type: ignore[no-any-return]
+                except requests.RequestException as exc:
+                    last_exc = exc
+                    if attempt == _MAX_RETRIES:
+                        break
+                    wait = _BACKOFF_BASE ** attempt
+                    logger.warning(
+                        "FRED request failed (attempt %d/%d): %s — retrying in %ds",
+                        attempt, _MAX_RETRIES, exc, wait,
+                    )
+                    time.sleep(wait)
+            sp["retries"] = _MAX_RETRIES
+            raise last_exc
 
     def fetch_wti_price(self) -> pd.DataFrame:
         """Monthly average WTI crude oil spot price (FRED series WTISPLC).

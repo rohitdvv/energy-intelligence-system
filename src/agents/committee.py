@@ -26,6 +26,7 @@ import anthropic
 
 from agents.prompts import BEAR_SYSTEM_PROMPT, BULL_SYSTEM_PROMPT, PM_SYSTEM_PROMPT
 from agents.tools import TOOL_SPECS, execute_tool
+from observability import record_llm, span
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +62,13 @@ class Committee:
         system: list[dict[str, Any]],
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
+        agent: str | None = None,
     ) -> Any:
-        """Call messages.create with exponential-backoff on rate limits / 5xx."""
+        """Call messages.create with exponential-backoff on rate limits / 5xx.
+
+        Each API call is timed and reported to the telemetry layer with token
+        usage, $ cost, and the number of retries that preceded success/failure.
+        """
         kwargs: dict[str, Any] = {
             "model": self.model,
             "max_tokens": 800,
@@ -74,10 +80,24 @@ class Committee:
 
         last_exc: Exception = RuntimeError("no attempts made")
         for attempt in range(1, _MAX_RETRIES + 1):
+            call_start = time.time()
             try:
-                return self._client.messages.create(**kwargs)
+                response = self._client.messages.create(**kwargs)
+                record_llm(
+                    self.model,
+                    response,
+                    duration_ms=(time.time() - call_start) * 1000,
+                    agent=agent,
+                    retries=attempt - 1,
+                )
+                return response
             except anthropic.RateLimitError as exc:
                 last_exc = exc
+                record_llm(
+                    self.model, None, duration_ms=(time.time() - call_start) * 1000,
+                    agent=agent, retries=attempt - 1, success=False,
+                    error=f"RateLimitError: {exc}",
+                )
                 if attempt == _MAX_RETRIES:
                     break
                 wait = _BACKOFF_BASE ** attempt
@@ -85,6 +105,11 @@ class Committee:
                 time.sleep(wait)
             except anthropic.APIStatusError as exc:
                 last_exc = exc
+                record_llm(
+                    self.model, None, duration_ms=(time.time() - call_start) * 1000,
+                    agent=agent, retries=attempt - 1, success=False,
+                    error=f"APIStatusError {exc.status_code}: {exc}",
+                )
                 if attempt == _MAX_RETRIES or exc.status_code < 500:
                     break
                 wait = _BACKOFF_BASE ** attempt
@@ -102,6 +127,7 @@ class Committee:
         user_message: str,
         tools: list[dict[str, Any]],
         max_turns: int = 8,
+        agent: str | None = None,
     ) -> dict[str, Any]:
         """Run a single agent with a full tool-use agentic loop.
 
@@ -130,6 +156,7 @@ class Committee:
                 system=system_content,
                 messages=messages,
                 tools=tools if tools else None,
+                agent=agent,
             )
 
             # Append this assistant turn to the conversation
@@ -237,10 +264,14 @@ class Committee:
             basin, fuel_type, target_year, wti_assumption,
         )
 
-        bull = self.run_agent(BULL_SYSTEM_PROMPT, context, TOOL_SPECS)
+        with span("llm", "committee.bull", basin=basin, fuel_type=fuel_type) as sp:
+            bull = self.run_agent(BULL_SYSTEM_PROMPT, context, TOOL_SPECS, agent="bull")
+            sp["tool_calls"] = len(bull["tool_calls"])
         logger.info("Bull complete — %d tool calls", len(bull["tool_calls"]))
 
-        bear = self.run_agent(BEAR_SYSTEM_PROMPT, context, TOOL_SPECS)
+        with span("llm", "committee.bear", basin=basin, fuel_type=fuel_type) as sp:
+            bear = self.run_agent(BEAR_SYSTEM_PROMPT, context, TOOL_SPECS, agent="bear")
+            sp["tool_calls"] = len(bear["tool_calls"])
         logger.info("Bear complete — %d tool calls", len(bear["tool_calls"]))
 
         pm_context = (
@@ -256,7 +287,8 @@ class Committee:
             f"{bear['text_response']}\n\n"
             "Issue your binding investment committee verdict."
         )
-        pm = self.run_agent(PM_SYSTEM_PROMPT, pm_context, [])
+        with span("llm", "committee.pm", basin=basin, fuel_type=fuel_type):
+            pm = self.run_agent(PM_SYSTEM_PROMPT, pm_context, [], agent="pm")
         logger.info("PM complete — verdict issued")
 
         total_tool_calls = (
