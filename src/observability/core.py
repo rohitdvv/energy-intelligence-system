@@ -35,6 +35,7 @@ from contextlib import contextmanager
 import json
 
 from observability.pricing import cost_usd
+from observability.redact import redact, redact_value
 from observability.sinks import (
     DuckDBSink,
     LoggingSink,
@@ -93,6 +94,10 @@ class Telemetry:
         try:
             with self._lock:
                 self._counter += 1
+            # Last line of defence: nothing reaches a sink with a credential in it.
+            if event.error:
+                event.error = redact(event.error)
+            event.attributes = redact_value(event.attributes)
             self._sink.emit(event)
         except Exception as exc:  # noqa: BLE001
             logger.debug("Telemetry.record failed: %s", exc)

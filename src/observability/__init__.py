@@ -23,7 +23,11 @@ from observability.core import (
     track,
 )
 
+from observability.redact import redact, redact_value
+
 __all__ = [
+    "redact",
+    "redact_value",
     "CATEGORY_API",
     "CATEGORY_LLM",
     "CATEGORY_MODEL",

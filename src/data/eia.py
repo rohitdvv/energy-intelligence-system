@@ -21,7 +21,7 @@ import pandas as pd
 import requests
 
 from config import get_eia_key
-from observability import span
+from observability import redact, span
 
 logger = logging.getLogger(__name__)
 
@@ -104,13 +104,16 @@ class EIAClient:
                     sp["retries"] = attempt - 1
                     return payload
                 except (requests.RequestException, ValueError) as exc:
-                    last_exc = exc
+                    # The original message contains the URL with api_key, so a
+                    # new exception replaces it and the chain is never kept.
+                    safe_message = redact(exc)
+                    last_exc = requests.RequestException(safe_message)
                     if attempt == _MAX_RETRIES:
                         break
                     wait = _BACKOFF_BASE ** attempt
                     logger.warning(
                         "EIA request failed (attempt %d/%d): %s — retrying in %ds",
-                        attempt, _MAX_RETRIES, exc, wait,
+                        attempt, _MAX_RETRIES, safe_message, wait,
                     )
                     time.sleep(wait)
             sp["retries"] = _MAX_RETRIES
