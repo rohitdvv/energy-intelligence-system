@@ -95,6 +95,7 @@ hr { border-color:rgba(255,255,255,.07) !important; }
 }
 </style>
 """
+from ui.access import require_access
 from ui.chat import render_chat
 from ui.committee import render_committee
 from ui.economics import render_economics
@@ -213,10 +214,12 @@ def main() -> None:
         render_map(basin, fuel_type, target_year, wti)
 
     with tab_chat:
-        render_chat(client)
+        if require_access("ai", form_key="chat"):
+            render_chat(client)
 
     with tab_co:
-        render_committee(basin, fuel_type, target_year, wti, client)
+        if require_access("ai", form_key="committee"):
+            render_committee(basin, fuel_type, target_year, wti, client)
 
     with tab_me:
         render_memo(basin, fuel_type, target_year)
@@ -225,7 +228,8 @@ def main() -> None:
         render_economics(basin, fuel_type, wti)
 
     with tab_obs:
-        render_observatory()
+        if require_access("observatory", form_key="observatory"):
+            render_observatory()
 
 
 if __name__ == "__main__":

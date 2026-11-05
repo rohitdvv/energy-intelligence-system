@@ -41,10 +41,31 @@ data APIs** (EIA · FRED · BSEE):
 - **Tool usage** — call counts, latency and error rate for each agent tool
 - **Error feed + event log** — the most recent failures and raw events
 
-It's **fail-open** (telemetry never breaks the app) and needs no setup. Optional
-env vars enable more: `OBS_DUCKDB_PATH` persists history to DuckDB, and
+It's **fail-open** (telemetry never breaks the app). Optional env vars enable
+more: `OBS_DUCKDB_PATH` persists history to DuckDB, and
 `OTEL_EXPORTER_OTLP_ENDPOINT` streams to any OpenTelemetry collector (Grafana,
 Datadog, …). See [`docs/observability.md`](./docs/observability.md).
+
+### Access codes
+
+The data views are public. Two features stay locked until you set a code of at
+least 16 characters in the app's secrets:
+
+| Secret | Unlocks |
+|---|---|
+| `AI_ACCESS_CODE` | Chat and Committee, which make paid Claude calls |
+| `OBSERVATORY_ACCESS_CODE` | The Observatory, which shows activity from every viewer |
+
+Changing a code signs out every session that used the old one.
+
+### Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests
+```
+
+The tests use fake keys and a fake Claude client, so they make no paid calls.
 
 ---
 

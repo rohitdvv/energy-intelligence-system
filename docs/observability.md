@@ -32,6 +32,16 @@ and estimated USD spend.
 - **Low churn.** Call sites are instrumented with a decorator, a context
   manager, or a one-liner.
 
+## Access and secrets
+
+The Observatory shows activity from every viewer, so it stays locked until
+`OBSERVATORY_ACCESS_CODE` is set (at least 16 characters).
+
+Credentials never belong in telemetry. The EIA and FRED clients replace request
+errors with a redacted copy before anything can log or display them, and
+`Telemetry.record` redacts every event again before it reaches a sink. Any new
+code that records exception text should use `observability.redact`.
+
 ## Configuration (all optional)
 
 | Env var | Effect |

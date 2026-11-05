@@ -35,6 +35,14 @@ def _get_secret(key: str) -> str:
         return value
 
 
+def get_optional_secret(key: str) -> str | None:
+    """Return a secret that may legitimately be absent, or None if unset."""
+    try:
+        return _get_secret(key)
+    except RuntimeError:
+        return None
+
+
 def check_secrets() -> None:
     """Stop the Streamlit app early with a clear error if any API key is absent."""
     import streamlit as st
