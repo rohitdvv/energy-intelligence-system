@@ -395,7 +395,7 @@ def _render_usgs_section(basin: str, fuel_type: str, kpi: dict | None) -> None:
     if kpi:
         ann_prod = (kpi.get("projected_production") or {}).get("value")
         if ann_prod:
-            adequacy = resource_adequacy_years(basin, fuel_type, ann_prod * 12)
+            adequacy = resource_adequacy_years(basin, fuel_type, ann_prod)
             if adequacy:
                 label = "Oil Resource Adequacy" if fuel_type.lower() == "oil" else "Gas Resource Adequacy"
                 c4.metric(label, f"{adequacy:,} yrs",
