@@ -25,6 +25,15 @@ _PLOTLY_LAYOUT = dict(
     height=300,
 )
 
+_NUMERIC_COLUMNS = (
+    "status_code", "retries", "cost_usd", "input_tokens", "output_tokens",
+    "total_tokens", "cache_read_tokens",
+)
+_ATTRIBUTE_COLUMNS = _NUMERIC_COLUMNS + (
+    "source", "agent", "model", "route", "endpoint", "tool_error", "basin",
+    "result_source", "stop_reason",
+)
+
 
 def _events_df() -> pd.DataFrame:
     """Flatten the telemetry buffer into a tidy DataFrame."""
@@ -44,17 +53,16 @@ def _events_df() -> pd.DataFrame:
         }
         # Promote common attributes to columns for easy plotting.
         attrs = e.attributes or {}
-        for key in (
-            "source", "agent", "model", "route", "endpoint", "status_code",
-            "retries", "cost_usd", "input_tokens", "output_tokens",
-            "total_tokens", "cache_read_tokens", "tool_error", "basin",
-            "result_source", "stop_reason",
-        ):
-            if key in attrs:
-                row[key] = attrs[key]
+        for key in _ATTRIBUTE_COLUMNS:
+            row[key] = attrs.get(key)
         rows.append(row)
 
-    return pd.DataFrame(rows).sort_values("ts").reset_index(drop=True)
+    # Every attribute column exists even when no event in the buffer set it,
+    # so the views below never have to check for a missing column.
+    df = pd.DataFrame(rows)
+    for key in _NUMERIC_COLUMNS:
+        df[key] = pd.to_numeric(df[key], errors="coerce")
+    return df.sort_values("ts").reset_index(drop=True)
 
 
 def _empty_state() -> None:

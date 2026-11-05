@@ -58,13 +58,13 @@ def _run_debate(
     try:
         with st.status("🏛️ Investment committee in session…", expanded=True) as status:
             status.write("🐂 **Bull analyst** gathering production data and building thesis…")
-            bull = committee.run_agent(BULL_SYSTEM_PROMPT, context, TOOL_SPECS)
+            bull = committee.run_agent(BULL_SYSTEM_PROMPT, context, TOOL_SPECS, agent="bull")
 
             status.write(
                 f"🐂 Bull complete ({len(bull['tool_calls'])} tool calls).  \n"
                 "🐻 **Bear analyst** investigating anomalies and risks…"
             )
-            bear = committee.run_agent(BEAR_SYSTEM_PROMPT, context, TOOL_SPECS)
+            bear = committee.run_agent(BEAR_SYSTEM_PROMPT, context, TOOL_SPECS, agent="bear")
 
             status.write(
                 f"🐻 Bear complete ({len(bear['tool_calls'])} tool calls).  \n"
@@ -74,6 +74,7 @@ def _run_debate(
                 PM_SYSTEM_PROMPT,
                 _build_pm_context(basin, fuel_type, target_year, wti, bull, bear),
                 [],
+                agent="pm",
             )
 
             total = len(bull["tool_calls"]) + len(bear["tool_calls"]) + len(pm["tool_calls"])
