@@ -16,7 +16,7 @@
 4. Change target year from 2026 to 2028 — watch all charts update
 
 ### 1:30 — Forecast Tab (60 sec)
-1. "Blue is real historical EIA data going back to 2005. Orange is the Prophet forecast. The shaded band is an 80% band built from the model's own past forecast errors, and the dotted line is a repeat-last-year baseline."
+1. "Blue is real historical EIA data going back to 2005. Orange is the forecast from whichever of three models has been most accurate for this basin in past-year tests; the green or amber box underneath says which one and by how much. The shaded band is an 80% band built from the model's own past forecast errors, and the dotted line is a repeat-last-year baseline."
 2. Hover over a red anomaly dot — show the event label (e.g. COVID-19, Hurricane)
 3. Drag the cutoff year slider left — "This shows what the model would have predicted if we only had data up to 2019 — a validation tool for forecast credibility"
 
@@ -51,7 +51,7 @@
 - **5 AI tools** called per agent turn, grounding every claim in live data
 - **3 AI agents** debate every investment thesis before a verdict is issued
 - **80% CI** on every forecast — explicit uncertainty quantification
-- **Rolling backtest** on the Forecast page — the model is compared with a repeat-last-year baseline at each horizon, and the page says when the baseline has been better
+- **Model selection by backtest** on the Forecast page — Prophet, an EIA well-activity model and repeat-last-year are tested on past years, the most accurate is shown, and the page says when nothing has beaten repeating the last year
 
 ---
 

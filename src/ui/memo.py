@@ -91,7 +91,7 @@ _TEMPLATE = """\
 | Item | Detail |
 |---|---|
 | Data sources | EIA Open Data API v2 · FRED WTISPLC |
-| Forecasting model | Facebook Prophet — multiplicative seasonality · 0.05 changepoint prior · 80% CI |
+| Forecasting model | Per basin, the most accurate in past-year tests of: Prophet trend · EIA well activity · repeat last year. 80% band from past errors |
 | Tool calls executed | {total_tool_calls} |
 | Analysis duration | {latency_seconds}s |
 | Analysis timestamp | {date} |
@@ -256,7 +256,7 @@ def _generate_pdf_bytes(debate_result: dict[str, Any]) -> bytes:
     pdf.set_font("Helvetica", "", 8)
     notes = [
         ("Data sources", "EIA Open Data API v2 | FRED WTISPLC"),
-        ("Forecasting model", "Facebook Prophet - multiplicative seasonality, 80% CI"),
+        ("Forecasting model", "Best backtested of Prophet / EIA well activity / last year"),
         ("Tool calls executed", str(meta.get("total_tool_calls", "N/A"))),
         ("Analysis duration", f"{meta.get('latency_seconds', 'N/A')}s"),
     ]

@@ -35,7 +35,7 @@ DATA GROUNDING RULES (mandatory):
 
 AVAILABLE TOOLS:
 - get_production_history  : latest monthly stats for a basin (trend, YoY, averages)
-- forecast_basin          : Prophet forecast through a target year + 80% CI
+- forecast_basin          : forecast through a target year from the model with the best track record + 80% band
 - get_kpi_snapshot        : full KPI suite (growth, decline, volatility, revenue)
 - compare_basins          : rank all 6 basins by projected production with RPI scores
 - investigate_anomalies   : detect anomalous production months with event context

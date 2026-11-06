@@ -1,7 +1,7 @@
 """Energy Intelligence System — CDF Energy AI Hackathon.
 
 A decision-support tool for U.S. oil & gas investment analysis powered by real
-EIA / FRED data, Prophet forecasting, and a multi-agent Claude AI committee that
+EIA / FRED data, backtested forecasting, and a multi-agent Claude AI committee that
 surfaces regional production KPIs and investment-grade deal memos.
 
 Each section is its own page under a top navigation bar, so only the page being
@@ -151,9 +151,9 @@ def _forecast_page() -> None:
     page_header(
         eyebrow=_eyebrow(),
         title="Forecast",
-        description="Monthly production history, a Prophet forecast and a simple baseline. "
-        "The 80% band comes from the model's past errors. Move the cutoff to see how the "
-        "forecast changes.",
+        description="Monthly production history and a forecast from whichever model has been "
+        "most accurate for this basin in past-year tests. The 80% band comes from that model's "
+        "past errors. Move the cutoff to see how the forecast changes.",
     )
     render_forecast(*_context())
 

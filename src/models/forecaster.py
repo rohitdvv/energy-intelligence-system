@@ -1,4 +1,4 @@
-"""Prophet-based monthly production forecaster.
+"""Prophet-based monthly production forecaster (one of the candidates in models/selection.py).
 
 Methodology
 -----------
@@ -44,7 +44,9 @@ class ForecastResult:
     fuel_type: str
     cutoff_year: int
     horizon_year: int
-    model: Prophet = field(repr=False)
+    model: Prophet | None = field(default=None, repr=False)
+    method: str = "prophet"
+    """Which model produced the forecast rows (see models/selection.py)."""
 
     @property
     def historical(self) -> pd.DataFrame:

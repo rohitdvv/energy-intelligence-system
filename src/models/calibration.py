@@ -32,8 +32,9 @@ from typing import Any, Callable
 import numpy as np
 import pandas as pd
 
-FitPredict = Callable[[pd.DataFrame, int], np.ndarray]
-"""(train frame with ds, y; months to predict) -> forecasts for those months."""
+FitPredict = Callable[[pd.DataFrame, int], "np.ndarray | None"]
+"""(train frame with ds, y; months to predict) -> forecasts for those months,
+or None when the model cannot forecast from that origin (it is then skipped)."""
 
 LEVEL = 0.80
 MAX_YEARS = 3
@@ -113,6 +114,8 @@ def run_backtest(
         if len(train) < MIN_TRAIN_MONTHS or origin_year not in totals.index:
             continue
         yhat = fit_predict(train, horizon)
+        if yhat is None:
+            continue
         months = pd.date_range(origin + pd.DateOffset(months=1), periods=horizon, freq="MS")
         naive = np.tile(train["y"].to_numpy()[-12:], max_years)
         actual = data.set_index("ds")["y"].reindex(months).to_numpy()

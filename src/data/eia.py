@@ -11,8 +11,14 @@ latest month of EIA's reported state data are dropped.
 
 Anadarko has no STEO region, so it is still the Oklahoma state total.
 
+For each region STEO also publishes the drilling-activity split behind the
+total: production from wells that started producing that month, and the
+change in production from older wells. The forecast's well-activity model
+uses those two series (see models/drivers.py).
+
 Endpoints used:
   Regions : api.eia.gov/v2/steo/data                 (COPR<code>, NGMP<code>)
+  Drivers : api.eia.gov/v2/steo/data                 (CONW/COEOP<code>, NGNW/NGEOP<code>)
   Oil     : api.eia.gov/v2/petroleum/crd/crpdn/data  (Mbbls/month, state level)
   Gas     : api.eia.gov/v2/natural-gas/prod/sum/data (MMcf/month, state level)
   WTI     : api.eia.gov/v2/petroleum/pri/spt/data    ($/bbl)
@@ -53,6 +59,13 @@ STEO_REGIONS: dict[str, str] = {
     "Eagle Ford":  "EF",
     "Haynesville": "HA",
     "Appalachia":  "AP",
+}
+
+# STEO well-activity series per fuel: (new-well production, legacy change).
+# Oil in thousand b/d, gas in million cubic feet per day.
+STEO_DRIVERS: dict[str, tuple[str, str]] = {
+    "oil": ("CONW", "COEOP"),
+    "gas": ("NGNW", "NGEOP"),
 }
 
 # Basins without a STEO region fall back to whole-state EIA data.
@@ -106,6 +119,38 @@ def steo_rows_to_monthly(rows: list[dict[str, Any]], last_reported: pd.Timestamp
     df["y"] = rate * 1_000 * df["ds"].dt.days_in_month
     df = df[df["ds"] <= last_reported].dropna(subset=["y"])
     return df.sort_values("ds").reset_index(drop=True)
+
+
+DRIVER_COLUMNS = ["ds", "new_well", "legacy_change"]
+
+
+def steo_driver_rows(rows: list[dict[str, Any]], fuel_type: str,
+                     last_reported: pd.Timestamp) -> pd.DataFrame:
+    """STEO new-well and legacy-change rows to one frame of daily rates, history only.
+
+    Columns: ds, new_well (production from new wells, kb/d or MMcf/d) and
+    legacy_change (month-on-month change in production from older wells,
+    normally negative, same units).
+    """
+    if not rows:
+        return pd.DataFrame(columns=DRIVER_COLUMNS)
+    new_prefix, legacy_prefix = STEO_DRIVERS[fuel_type]
+    df = pd.DataFrame(rows)
+    df["ds"] = pd.to_datetime(df["period"])
+    df["value"] = pd.to_numeric(df["value"], errors="coerce")
+    sid_col = next((c for c in ("seriesId", "series-id", "series") if c in df.columns), None)
+    if sid_col is None:
+        logger.warning("STEO driver rows have no series id column: %s", list(df.columns))
+        return pd.DataFrame(columns=DRIVER_COLUMNS)
+    sids = df[sid_col].astype(str)
+    df["kind"] = None
+    df.loc[sids.str.startswith(new_prefix), "kind"] = "new_well"
+    df.loc[sids.str.startswith(legacy_prefix), "kind"] = "legacy_change"
+    df = df.dropna(subset=["kind"])
+    wide = df.pivot_table(index="ds", columns="kind", values="value", aggfunc="first")
+    wide = wide.reindex(columns=DRIVER_COLUMNS[1:]).reset_index()
+    wide = wide[wide["ds"] <= last_reported].dropna()
+    return wide[DRIVER_COLUMNS].sort_values("ds").reset_index(drop=True)
 
 
 def _empty_frame() -> pd.DataFrame:
@@ -273,6 +318,30 @@ class EIAClient:
         df["basin"] = basin_name
         df["fuel_type"] = fuel_type
         return df[["ds", "y", "basin", "fuel_type"]]
+
+    def fetch_drivers(self, basin_name: str, fuel_type: str) -> pd.DataFrame:
+        """STEO new-well and legacy-change series for a basin, history only.
+
+        Empty for basins without a STEO region (Anadarko).
+        """
+        code = STEO_REGIONS.get(basin_name)
+        if code is None:
+            return pd.DataFrame(columns=DRIVER_COLUMNS)
+        new_prefix, legacy_prefix = STEO_DRIVERS[fuel_type]
+        payload = self._get("steo/data", [
+            ("frequency", "monthly"),
+            ("data[0]", "value"),
+            ("facets[seriesId][]", f"{new_prefix}{code}"),
+            ("facets[seriesId][]", f"{legacy_prefix}{code}"),
+            ("start", _start_date()),
+            ("sort[0][column]", "period"),
+            ("sort[0][direction]", "asc"),
+            ("length", "5000"),
+        ])
+        rows: list[dict[str, Any]] = payload.get("response", {}).get("data", [])
+        if not rows:
+            logger.warning("No STEO driver rows for %s %s", basin_name, fuel_type)
+        return steo_driver_rows(rows, fuel_type, self._last_reported_month(fuel_type))
 
     def fetch_oil_production_by_basin(self, basin_name: str) -> pd.DataFrame:
         """Monthly crude oil production for *basin_name*, in Mbbls/month."""

@@ -11,6 +11,7 @@ API keys must be in a .env file at the project root or in environment variables:
 Output files (data/raw/):
     eia_oil_<basin>_v2.parquet  — crude oil production, EIA region (Mbbls/month)
     eia_gas_<basin>_v2.parquet  — marketed gas production, EIA region (MMcf/month)
+    eia_drivers_<fuel>_<basin>_v1.parquet — EIA new-well and legacy-change rates
     wti_prices.parquet          — WTI spot price from FRED ($/bbl, monthly)
 
 A failed individual fetch prints a warning and continues; it does not abort
@@ -29,8 +30,8 @@ if str(_SRC) not in sys.path:
 
 import pandas as pd  # noqa: E402  (after sys.path patch)
 
-from data.eia import BASINS, EIAClient  # noqa: E402
-from data.loader import production_path  # noqa: E402
+from data.eia import BASINS, STEO_REGIONS, EIAClient  # noqa: E402
+from data.loader import drivers_path, production_path  # noqa: E402
 from data.fred import FREDClient  # noqa: E402
 
 logging.basicConfig(
@@ -94,6 +95,17 @@ def main() -> None:
         except Exception as exc:
             logger.warning("FAILED gas fetch — %s: %s", basin, exc)
             failure += 1
+
+    # --- EIA: well-activity drivers for the forecast (STEO regions only) ---
+    for fuel in ("oil", "gas"):
+        for basin in STEO_REGIONS:
+            try:
+                logger.info("EIA drivers %s — %s", fuel, basin)
+                _save(eia.fetch_drivers(basin, fuel), drivers_path(fuel, basin).stem)
+                success += 1
+            except Exception as exc:
+                logger.warning("FAILED driver fetch — %s %s: %s", fuel, basin, exc)
+                failure += 1
 
     # --- FRED: WTI price ---
     try:

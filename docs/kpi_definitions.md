@@ -12,7 +12,7 @@ All KPIs computed in `src/kpi/metrics.py`. Surfaced in Overview tab metric cards
 
 **Calculation:**
 - Historical year (≤ cutoff): sum of `y_actual` monthly values for that calendar year
-- Forecast year (> cutoff): sum of `y_forecast` (Prophet yhat) for that calendar year
+- Forecast year (> cutoff): sum of `y_forecast` for that calendar year, from the model chosen for this basin and horizon (see Forecast model selection below)
 
 **Answers:** "What is this basin expected to produce in my investment year?"
 
@@ -137,9 +137,35 @@ Until November 2026 basins were sums of whole states: Eagle Ford was all of Texa
 
 ---
 
+## Forecast model selection
+
+Computed by `src/models/selection.py`. Three models are backtested for every basin and fuel:
+
+| Model | What it does |
+|---|---|
+| Prophet trend | Trend with changepoints × yearly seasonality, fitted to production only |
+| EIA well activity | `rate[t+1] = rate[t] + new − d × rate[t]`, where `new` is the mean of EIA's new-well production (`CONW<code>` kb/d, `NGNW<code>` MMcf/d) over the 12 months to the origin and `d` is the mean of `−legacy_change / rate` (`COEOP<code>`, `NGEOP<code>`) over the same months. Heads towards `new / d`. Not available for Anadarko |
+| Repeat last year | The last 12 months repeated (the flat baseline) |
+
+For a forecast k years past the cutoff, the model with the lowest mean absolute error on annual totals at k years ahead is used (k capped at 3). Ties at one decimal go to the simpler model. Models that could not be tested on all the same past years are not compared. If the chosen model cannot run from the user's cutoff (for example, EIA's activity data starts later), the next best is used and the page says so. The same windows choose the model and report its error, so the chosen model's reported error is slightly optimistic.
+
+Backtest annual error (%) on EIA regional data, November 2026, eight year-end origins 2017–2024:
+
+| Series | Prophet 1/2/3 yr | Well activity 1/2/3 yr | Repeat 1/2/3 yr |
+|---|---|---|---|
+| Permian oil | 8.2 / 14.7 / 16.9 | 4.8 / 10.5 / 12.3 | 10.9 / 19.1 / 26.1 |
+| Bakken oil | 12.8 / 26.1 / 33.7 | 8.7 / 20.2 / 27.9 | 9.1 / 12.9 / 12.7 |
+| Eagle Ford oil | 10.7 / 20.9 / 25.6 | 5.6 / 13.2 / 17.8 | 6.2 / 10.8 / 11.1 |
+| Haynesville gas | 10.4 / 19.1 / 22.4 | 5.3 / 10.0 / 14.9 | 12.2 / 19.5 / 23.1 |
+| Appalachia gas | 3.7 / 8.0 / 12.5 | 2.6 / 3.3 / 4.5 | 5.0 / 8.4 / 11.3 |
+| Permian gas | 5.3 / 9.0 / 10.2 | 4.1 / 10.2 / 14.6 | 14.3 / 25.9 / 35.3 |
+| Anadarko oil (OK state) | 18.3 / 36.6 / 49.8 | n/a | 10.2 / 16.6 / 16.2 |
+
+The well-activity model wins at one year almost everywhere. For oil outside the Permian, repeating the last year is still the best guess at two and three years, and the app says so rather than showing a trend.
+
 ## Forecast reliability and bands
 
-Computed by `src/models/calibration.py`. The model is refit at each of the last eight year-ends using only data up to that point, and its misses over the next three years are recorded as `|actual − forecast| / forecast`.
+Computed by `src/models/calibration.py`. The chosen model is refit at each of the last eight year-ends using only data up to that point, and its misses over the next three years are recorded as `|actual − forecast| / forecast`.
 
 - **80% band** at horizon year k: the split-conformal quantile of those misses, the `⌈0.8(n+1)⌉`-th smallest of n. Band = forecast × (1 ± q_k). Monthly bands pool monthly misses by horizon year; annual bands use annual-total misses. Past three years, `q_k = q_3 × √(k/3)` (an assumption). Prophet's own interval is no longer shown: it covered about half of actual months against a nominal 80%.
 - **Baselines** scored on the same windows: seasonal naive (the last 12 months repeated) for monthly figures, flat (the last full year repeated) for annual totals. The Forecast page and the agents' `forecast_basin` tool say whether the model has beaten the flat baseline at that horizon.

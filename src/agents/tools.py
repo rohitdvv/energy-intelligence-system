@@ -17,7 +17,7 @@ import pandas as pd
 
 from data.bsee_loader import get_offshore_context
 from data.eia import BASINS, basin_scope
-from data.loader import load_production_no_cache
+from data.loader import load_drivers_no_cache, load_production_no_cache
 from data.usgs_loader import get_resource_assessment, resource_adequacy_years
 from kpi.metrics import (
     DEFAULT_HENRY_HUB,
@@ -25,8 +25,9 @@ from kpi.metrics import (
     basin_kpi_summary,
     relative_performance_index,
 )
-from models.calibration import annual_band, baseline_verdict, run_backtest
-from models.forecaster import forecast_basin as _fit_and_forecast
+from models.calibration import annual_band, baseline_verdict
+from models.forecaster import ForecastResult
+from models.selection import MODEL_LABELS, best_forecast, compare_models_cached
 from observability import mark_failed, span
 
 logger = logging.getLogger(__name__)
@@ -56,22 +57,29 @@ _BASIN_ENUM = BASINS  # ["Permian", "Bakken", ..., "Anadarko"]
 # Internal helpers
 # ------------------------------------------------------------------
 
-_BACKTESTS: dict[tuple, dict[str, Any]] = {}
+def _forecast(
+    basin: str, fuel_type: str, bdf: pd.DataFrame, cutoff_year: int, horizon_year: int,
+) -> tuple[ForecastResult, dict[str, Any], dict[str, Any]]:
+    """Forecast with the model that has the lowest past error at this horizon.
+
+    Returns the forecast, which model was used (with its backtest), and the
+    comparison of all candidate models. See models/selection.py.
+    """
+    drivers = load_drivers_no_cache(fuel_type, basin, live_fetch=True)
+    comparison = compare_models_cached(basin, fuel_type, bdf, drivers)
+    result, chosen = best_forecast(bdf, drivers, cutoff_year, horizon_year, comparison,
+                                   basin=basin, fuel_type=fuel_type)
+    return result, chosen, comparison
 
 
-def _backtest_for(basin: str, fuel_type: str, bdf: pd.DataFrame) -> dict[str, Any]:
-    """Rolling backtest of one series, reused until the data changes."""
-    key = (basin, fuel_type, len(bdf), str(bdf["ds"].max()), float(bdf["y"].iloc[-1]))
-    if key not in _BACKTESTS:
-        try:
-            bt = run_backtest(bdf)
-        except Exception as exc:  # a failed backtest must not break the forecast itself
-            logger.warning("backtest failed for %s %s: %r", basin, fuel_type, exc)
-            bt = {"error": str(exc)}
-        bt.pop("monthly", None)
-        bt.pop("annual", None)
-        _BACKTESTS[key] = bt
-    return _BACKTESTS[key]
+def _model_scores(comparison: dict[str, Any], k: int) -> dict[str, float]:
+    """Each candidate's average annual backtest error at k years ahead (capped at 3)."""
+    out: dict[str, float] = {}
+    for name in comparison.get("eligible", []):
+        rows = comparison["backtests"][name]["by_year"]
+        row = next((r for r in rows if r["year"] == k), rows[-1])
+        out[MODEL_LABELS[name]] = round(row["model_mape_annual"], 1)
+    return out
 
 
 def _load_basin(fuel_type: str, basin: str) -> pd.DataFrame:
@@ -152,15 +160,14 @@ def _exec_forecast_basin(inp: dict[str, Any]) -> dict[str, Any]:
     if bdf.empty:
         return {"error": f"No {fuel_type} data for '{basin}'. Run fetch_all.py first."}
 
-    result = _fit_and_forecast(bdf, cutoff_year, horizon_year, basin=basin, fuel_type=fuel_type)
+    result, chosen, comparison = _forecast(basin, fuel_type, bdf, cutoff_year, horizon_year)
 
     h_rows = result.df[result.df["ds"].dt.year == horizon_year]
     annual_total = round(float(h_rows["y_forecast"].sum()), 2) if not h_rows.empty else None
 
-    # Summing monthly interval bounds does not give an annual interval, and
-    # Prophet's interval has been far too narrow, so the band and the baseline
-    # check come from a rolling backtest of this series instead.
-    backtest = _backtest_for(basin, fuel_type, bdf)
+    # Summing monthly interval bounds does not give an annual interval, so the
+    # band and the baseline check come from the chosen model's rolling backtest.
+    backtest = chosen["backtest"]
     k = max(1, horizon_year - cutoff_year)
     band = annual_band(annual_total, k, backtest) if annual_total and "error" not in backtest else None
     verdict = baseline_verdict(backtest, k) if "error" not in backtest else None
@@ -183,8 +190,11 @@ def _exec_forecast_basin(inp: dict[str, Any]) -> dict[str, Any]:
         "horizon_year": horizon_year,
         "projected_annual_total": annual_total,
         "unit": "Mbbls/yr" if fuel_type == "oil" else "MMcf/yr",
+        "forecast_model": chosen["label"],
+        "model_selection": "lowest average annual error in past-year backtests at this horizon",
+        "backtest_annual_error_pct_by_model": _model_scores(comparison, k),
         "interval_80pct": band,
-        "interval_method": "calibrated from rolling-backtest errors of this series",
+        "interval_method": "calibrated from rolling-backtest errors of the chosen model",
         "backtest_vs_flat_baseline": verdict,
         "historical_cagr_pct": cagr,
         "data_scope": basin_scope(basin),
@@ -203,8 +213,10 @@ def _exec_get_kpi_snapshot(inp: dict[str, Any]) -> dict[str, Any]:
         return {"error": f"No {fuel_type} data for '{basin}'. Run fetch_all.py first."}
 
     cutoff_year = int(bdf["ds"].dt.year.max())
-    result = _fit_and_forecast(bdf, cutoff_year, target_year, basin=basin, fuel_type=fuel_type)
-    return basin_kpi_summary(result, target_year, wti_price=wti, henry_hub=henry_hub)
+    result, chosen, _ = _forecast(basin, fuel_type, bdf, cutoff_year, target_year)
+    summary = basin_kpi_summary(result, target_year, wti_price=wti, henry_hub=henry_hub)
+    summary["forecast_model"] = chosen["label"]
+    return summary
 
 
 def _exec_compare_basins(inp: dict[str, Any]) -> dict[str, Any]:
@@ -229,14 +241,16 @@ def _exec_compare_basins(inp: dict[str, Any]) -> dict[str, Any]:
         cutoff_year = int(bdf["ds"].dt.year.max())
         try:
             _t0 = time.monotonic()
-            result = _fit_and_forecast(bdf, cutoff_year, target_year, basin=basin, fuel_type=fuel_type)
+            result, chosen, _ = _forecast(basin, fuel_type, bdf, cutoff_year, target_year)
             _elapsed = time.monotonic() - _t0
             if _elapsed > 10:
                 logger.warning(
-                    "compare_basins: basin=%s Prophet fit took %.1fs (>10s threshold)",
+                    "compare_basins: basin=%s forecast took %.1fs (>10s threshold)",
                     basin, _elapsed,
                 )
-            summaries.append(basin_kpi_summary(result, target_year, wti_price=wti, henry_hub=henry_hub))
+            summary = basin_kpi_summary(result, target_year, wti_price=wti, henry_hub=henry_hub)
+            summary["forecast_model"] = chosen["label"]
+            summaries.append(summary)
         except Exception as exc:
             logger.warning("compare_basins: basin=%s failed: %r", basin, exc)
             summaries.append({"basin": basin, "error": str(exc)})
@@ -416,10 +430,12 @@ TOOL_SPECS: list[dict[str, Any]] = [
     {
         "name": "forecast_basin",
         "description": (
-            "Fit a Prophet model on historical production and forecast through horizon_year. "
-            "Returns the projected annual total, an 80% band calibrated from this series' past "
-            "forecast errors, whether the model has beaten a flat 'repeat last year' baseline at "
-            "this horizon, and historical CAGR. If it has not beaten the baseline, say so."
+            "Forecast production through horizon_year with whichever model (Prophet trend, EIA "
+            "well activity, or repeat last year) has had the lowest past error at this horizon "
+            "for this basin. Returns the projected annual total, the model used, every model's "
+            "backtest error, an 80% band calibrated from the chosen model's past errors, whether "
+            "it has beaten a flat 'repeat last year' baseline, and historical CAGR. If the chosen "
+            "model is 'Repeat last year', say that no model has done better than assuming no change."
         ),
         "input_schema": {
             "type": "object",

@@ -168,7 +168,7 @@ def render_hero(
   <div class="eis-hero-copy">
     <div class="eis-hero-eyebrow"><span class="eis-live"></span>U.S. oil &amp; gas intelligence</div>
     <h2>{headline}</h2>
-    <p>Public EIA production, a Prophet forecast and an AI investment committee,
+    <p>Public EIA production, a backtested forecast and an AI investment committee,
        side by side for every basin.</p>
     <div class="eis-chips">{''.join(chips)}</div>
   </div>

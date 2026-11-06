@@ -38,11 +38,11 @@
   ┌─────────────────────────────────────────┐               │
   │           ML + KPI LAYER                │               │
   │                                         │               │
-  │  forecaster.py ──► Prophet              │               │
-  │    • Multiplicative seasonality         │               │
-  │    • Changepoint prior 0.05             │               │
+  │  selection.py ──► best of 3 models      │               │
+  │    • Prophet trend                      │               │
+  │    • EIA well activity (drivers.py)     │               │
+  │    • Repeat last year (baseline)        │               │
   │    • 80% band from backtest errors      │               │
-  │    • Rolling backtest vs baseline       │               │
   │                                         │               │
   │  metrics.py ──► KPI Engine              │               │
   │    • Projected Production               │               │
@@ -123,7 +123,7 @@
 | Layer | Technology | Notes |
 |-------|-----------|-------|
 | UI framework | Streamlit 1.56 | 7-tab layout; `@st.fragment` for slider isolation |
-| Forecasting | Facebook Prophet 1.1.5 + CmdStanPy | Multiplicative seasonality, 80% CI |
+| Forecasting | Prophet 1.1.5, EIA well-activity model, repeat-last-year | Chosen per basin and horizon by rolling backtest; 80% band from past errors |
 | AI agents | Anthropic Claude `claude-sonnet-4-6` | Tool-use loop; multi-turn chat |
 | Data sources | EIA Open Data API v2, FRED API | Parquet cache; live-fetch fallback |
 | Charts | Plotly 5.22 | `go.Scattergeo`, `go.Choropleth`, `go.Scatterpolar` |
@@ -149,6 +149,8 @@ src/
 │   ├── forecaster.py         # ForecastResult dataclass + forecast_basin()
 │   ├── backtest.py           # Held-out MAPE backtest (legacy)
 │   ├── calibration.py        # Rolling backtest, calibrated bands, baseline check
+│   ├── drivers.py            # EIA well-activity model + repeat-last-year
+│   ├── selection.py          # Backtest all models, pick the best per horizon
 │   ├── well_economics.py     # Decline curve and DCF math
 │   └── xgb_forecaster.py     # XGBoost recursive forecaster (retained for future use)
 ├── kpi/
@@ -160,7 +162,7 @@ src/
 │   └── chat_agent.py         # Multi-turn conversational agent
 └── ui/
     ├── overview.py           # Tab 1: KPI cards + 5 comparison charts
-    ├── forecast.py           # Tab 2: Prophet chart + anomaly overlay
+    ├── forecast.py           # Tab 2: best-model chart, model comparison, anomaly overlay
     ├── map.py                # Tab 3: interactive Scattergeo + Choropleth
     ├── chat.py               # Tab 4: multi-turn AI chat with inline charts
     ├── committee.py          # Tab 5: live 3-agent investment debate
@@ -221,7 +223,7 @@ User prompt → Claude API (tools=TOOL_SPECS)
 | Tool | Returns |
 |------|---------|
 | `get_production_history` | Latest month, 12m avg, YoY, trend |
-| `forecast_basin` | Prophet yhat, annual total, 80% CI, CAGR |
+| `forecast_basin` | Annual total from the best-backtested model, every model's error, 80% band, CAGR |
 | `get_kpi_snapshot` | Full KPI suite |
 | `compare_basins` | All 6 basins ranked + RPI |
 | `investigate_anomalies` | Z-score anomalies + event calendar |

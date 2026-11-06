@@ -1,4 +1,4 @@
-"""Forecast tab: Prophet production forecast with anomaly overlay."""
+"""Forecast tab: the most accurate backtested model per basin, with anomaly overlay."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -9,30 +9,37 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from agents.tools import execute_tool
-from data.loader import load_production_no_cache
-from models.calibration import apply_monthly_band, run_backtest
-from models.forecaster import forecast_basin as _fit
+from data.loader import load_drivers_no_cache, load_production_no_cache
+from models.selection import MODEL_LABELS, best_forecast, compare_models_cached
 from ui.theme import FLARE, MUTED, RED, STEEL, TRANSPARENT, style_figure, with_alpha
 
 _NOW_YEAR = datetime.now().year
 
 _METHODOLOGY = """\
-**Model:** Prophet (Meta, 2017): a trend with changepoints times a yearly seasonal pattern \
-(multiplicative seasonality, changepoint prior scale 0.05). Prices, rig counts and completions \
-are not inputs, so the forecast assumes the recent trend continues.
+**Three models are tested for every basin:**
 
-**80% band:** taken from the model's own past misses, not from Prophet's built-in interval, \
-which covered only about half of actual months when tested. The model is refit at each of the \
-last eight year-ends using only data up to that point, and the band at each horizon is set so \
-that about 80% of those past misses would have fallen inside it. Beyond the three tested years \
-the band widens with the square root of the horizon, which is an assumption.
+- **Prophet trend** (Meta, 2017): a trend with changepoints times a yearly seasonal pattern. \
+It sees only past production.
+- **EIA well activity**: EIA splits each region's monthly change into production from new wells \
+and the decline of older wells. This model holds the past 12 months of new-well production steady \
+and lets the older wells keep declining at their recent rate, so production heads towards the \
+level where new wells just replace the decline. Not available for Anadarko, which EIA does not \
+publish as a region.
+- **Repeat last year**: the last 12 months before the cutoff, repeated. This is the baseline.
 
-**Baseline:** the dotted line repeats the last 12 months before the cutoff. A forecast is only \
-worth reading as a forecast where it has beaten that baseline in the backtest.
+**Which model is shown:** each model is refit at each of the last eight year-ends using only data \
+up to that point, and its forecasts are compared with what happened. For a forecast N years past \
+the cutoff, the model with the lowest average error on annual totals at N years ahead is used \
+(three years is the longest tested). Ties go to the simpler model. Because the same tests choose \
+the model and report its error, the error shown for the chosen model is slightly optimistic.
 
-**Caveats:** backtests use today's revised data and the windows overlap in time, so treat \
-small differences as ties. Basin figures are EIA regional estimates, and EIA revises them. \
-Directional planning only; not a reserves estimate.
+**80% band:** set from the chosen model's own past misses, so that about 80% of them would have \
+fallen inside it. Beyond three years it widens with the square root of the horizon, which is an \
+assumption.
+
+**Caveats:** none of the models use prices or forecast rig counts. Backtests use today's revised \
+data and the windows overlap in time, so treat small differences as ties. Basin figures are EIA \
+regional estimates, and EIA revises them. Directional planning only; not a reserves estimate.
 """
 
 
@@ -40,17 +47,24 @@ Directional planning only; not a reserves estimate.
 # Cached loaders
 # ------------------------------------------------------------------
 
+def _series(basin: str, fuel_type: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    df = load_production_no_cache(fuel_type=fuel_type, live_fetch=True)
+    bdf = df[df["basin"] == basin][["ds", "y"]].dropna().copy()
+    return bdf, load_drivers_no_cache(fuel_type, basin, live_fetch=True)
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _cached_forecast(
     basin: str, fuel_type: str, cutoff_year: int, horizon_year: int
-) -> pd.DataFrame | None:
-    """Return result.df as a plain DataFrame (Prophet model excluded for cache safety)."""
-    df = load_production_no_cache(fuel_type=fuel_type, live_fetch=True)
-    bdf = df[df["basin"] == basin][["ds", "y"]].dropna().copy()
+) -> tuple[pd.DataFrame, dict[str, Any], dict[str, Any]] | None:
+    """Forecast frame, the chosen model, and the comparison of all models (plain data only)."""
+    bdf, drivers = _series(basin, fuel_type)
     if bdf.empty:
         return None
-    result = _fit(bdf, cutoff_year, horizon_year, basin=basin, fuel_type=fuel_type)
-    return result.df.copy()
+    comparison = compare_models_cached(basin, fuel_type, bdf, drivers)
+    result, chosen = best_forecast(bdf, drivers, cutoff_year, horizon_year, comparison,
+                                   basin=basin, fuel_type=fuel_type)
+    return result.df.copy(), chosen, comparison
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -58,19 +72,6 @@ def _cached_anomalies(basin: str, fuel_type: str) -> dict[str, Any]:
     return execute_tool("investigate_anomalies", {"basin": basin, "fuel_type": fuel_type})
 
 
-
-@st.cache_data(ttl=6 * 3600, show_spinner=False)
-def _cached_backtest(basin: str, fuel_type: str) -> dict[str, Any]:
-    """Rolling-origin backtest for one series; the basis of the band and baseline check."""
-    df = load_production_no_cache(fuel_type=fuel_type, live_fetch=True)
-    bdf = df[df["basin"] == basin][["ds", "y"]].dropna().copy()
-    try:
-        bt = run_backtest(bdf)
-    except Exception as exc:
-        return {"error": str(exc)}
-    bt.pop("monthly", None)
-    bt.pop("annual", None)
-    return bt
 
 
 def _baseline(fc_df: pd.DataFrame) -> pd.DataFrame:
@@ -98,6 +99,8 @@ def _build_chart(
     basin: str,
     fuel_type: str,
     calibrated: bool = False,
+    model_label: str = "Forecast",
+    show_baseline: bool = True,
 ) -> go.Figure:
     df = fc_df.copy()
     df["ds"] = pd.to_datetime(df["ds"])
@@ -126,18 +129,18 @@ def _build_chart(
             x=ci_x, y=ci_y, fill="toself",
             fillcolor=with_alpha(FLARE, 0.16),
             line=dict(color=TRANSPARENT),
-            name="80% band (from past errors)" if calibrated else "80% band (Prophet, uncalibrated)",
+            name="80% band (from past errors)" if calibrated else "80% band (uncalibrated)",
             hoverinfo="skip",
         ))
         # Forecast line
         fig.add_trace(go.Scatter(
             x=fcast["ds"], y=fcast["y_forecast"],
-            name="Forecast (Prophet)",
+            name=f"Forecast ({model_label})",
             line=dict(color=FLARE, width=2.4, dash="dash"),
             mode="lines",
             hovertemplate="%{y:,.1f}<extra>Forecast</extra>",
         ))
-        base = _baseline(df)
+        base = _baseline(df) if show_baseline else pd.DataFrame()
         if not base.empty:
             fig.add_trace(go.Scatter(
                 x=base["ds"], y=base["y"],
@@ -255,31 +258,27 @@ def _interactive_chart(basin: str, fuel_type: str, target_year: int) -> None:
         key="forecast_cutoff_slider",
     )
 
-    with st.spinner(f"Fitting Prophet for {basin} ({fuel_type})…"):
+    with st.spinner(f"Testing forecast models for {basin} ({fuel_type})…"):
         try:
-            fc_df = _cached_forecast(basin, fuel_type, cutoff_year, target_year)
+            out = _cached_forecast(basin, fuel_type, cutoff_year, target_year)
         except Exception as exc:
             st.error(f"Forecast failed: {exc}")
             return
 
-    if fc_df is None:
+    if out is None:
         st.warning(
             "No production data. Run `python src/data/fetch_all.py` first.", icon=":material/warning:"
         )
         return
-
-    with st.spinner("Backtesting the model on past years…"):
-        bt = _cached_backtest(basin, fuel_type)
-    calibrated = "error" not in bt
-    if calibrated:
-        fc_df = apply_monthly_band(fc_df, cutoff_year, bt)
+    fc_df, chosen, comparison = out
 
     with st.spinner("Loading anomaly detection…"):
         anom = _cached_anomalies(basin, fuel_type)
 
-    fig = _build_chart(fc_df, cutoff_year, anom, basin, fuel_type, calibrated)
+    fig = _build_chart(fc_df, cutoff_year, anom, basin, fuel_type, chosen["calibrated"],
+                       model_label=chosen["label"], show_baseline=chosen["model"] != "repeat")
     st.plotly_chart(fig, use_container_width=True)
-    _reliability(bt, target_year - cutoff_year)
+    _reliability(chosen, comparison, target_year - cutoff_year)
 
     anom_list = anom.get("anomalies", []) if "error" not in anom else []
     n = len(anom_list)
@@ -303,50 +302,68 @@ def _interactive_chart(basin: str, fuel_type: str, target_year: int) -> None:
             st.dataframe(_pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
-def _reliability(bt: dict[str, Any], horizon_years: int) -> None:
-    """Tell the reader how far to trust the forecast, from the rolling backtest."""
+def _reliability(chosen: dict[str, Any], comparison: dict[str, Any], horizon_years: int) -> None:
+    """Say which model is shown, why, and how far to trust it, from the rolling backtests."""
+    bt = chosen["backtest"]
     if "error" in bt:
-        st.caption(f"Reliability check unavailable: {bt['error']} The band shown is Prophet's own, "
-                   "which has been too narrow in past tests.")
+        st.caption(f"Reliability check unavailable ({bt['error']}). The band shown is not calibrated.")
         return
     rows = bt["by_year"]
     k = max(1, horizon_years)
     row = next((r for r in rows if r["year"] == k), rows[-1])
-    beyond = k > row["year"]
+    tested = f"{row['year']} year{'s' if row['year'] > 1 else ''}"
+    beyond = f" The target is {k} years out, past the {row['year']} years tested." if k > row["year"] else ""
+    fallback = (f" {MODEL_LABELS[chosen['fallback_from']]} did better in tests but cannot run from "
+                "this cutoff." if chosen.get("fallback_from") else "")
     model, flat = row["model_mape_annual"], row["flat_mape_annual"]
-    years = f"{row['year']} year{'s' if row['year'] > 1 else ''}"
-    if round(model, 6) < round(flat, 6):
+
+    if chosen["model"] == "repeat":
+        st.warning(
+            f"At {tested} ahead no model has beaten simply repeating the last year "
+            f"(average annual error {model:.1f}% in {row['windows']} past tests), so that is the "
+            "forecast shown. Read it as \"no change\", not as a prediction of change."
+            + beyond + fallback,
+            icon=":material/warning:",
+        )
+    elif round(model, 6) < round(flat, 6):
         st.success(
-            f"At {years} ahead this model has beaten the baseline: average annual error "
-            f"{model:.1f}% against {flat:.1f}% for repeating the last year "
-            f"({row['windows']} past tests)."
-            + (f" The target is {k} years out, past what has been tested." if beyond else ""),
+            f"Showing **{chosen['label']}**, the most accurate model at {tested} ahead for this basin: "
+            f"average annual error {model:.1f}% against {flat:.1f}% for repeating the last year "
+            f"({row['windows']} past tests)." + beyond + fallback,
             icon=":material/verified:",
         )
     else:
         st.warning(
-            f"At {years} ahead this model has done worse than simply repeating the last year: "
-            f"average annual error {model:.1f}% against {flat:.1f}% ({row['windows']} past tests). "
-            "Treat the forecast line as a scenario, and the baseline as the better guess."
-            + (f" The target is {k} years out, past what has been tested." if beyond else ""),
+            f"Showing **{chosen['label']}**, but at {tested} ahead it has not beaten repeating the "
+            f"last year: {model:.1f}% against {flat:.1f}% ({row['windows']} past tests)."
+            + beyond + fallback,
             icon=":material/warning:",
         )
 
-    table = pd.DataFrame([{
-        "Years ahead": r["year"],
-        "Past tests": r["windows"],
-        "Model error, annual": f"{r['model_mape_annual']:.1f}%",
-        "Baseline error, annual": f"{r['flat_mape_annual']:.1f}%",
-        "Model error, monthly": f"{r['model_mape_monthly']:.1f}%",
-        "Baseline error, monthly": f"{r['naive_mape_monthly']:.1f}%",
-        "80% band, annual": f"±{r['band_annual'] * 100:.0f}%",
-    } for r in rows])
-    with st.expander("Backtest detail", icon=":material/fact_check:"):
+    table_rows = []
+    for name in comparison.get("eligible", []):
+        entry: dict[str, Any] = {"Model": MODEL_LABELS[name] + ("  ✓" if name == chosen["model"] else "")}
+        for r in comparison["backtests"][name]["by_year"]:
+            entry[f"{r['year']} yr ahead"] = f"{r['model_mape_annual']:.1f}%"
+        table_rows.append(entry)
+    with st.expander("Model comparison", icon=":material/fact_check:"):
         st.caption(
-            f"The model was refit at each year-end from {bt['origins'][0]} to {bt['origins'][-1]} "
-            "using only data up to that point. Errors are mean absolute percentage errors."
+            f"Average error on annual totals when each model was refit at each year-end from "
+            f"{bt['origins'][0]} to {bt['origins'][-1]} using only data up to that point. "
+            "Lower is better; ✓ marks the model shown."
         )
-        st.dataframe(table, use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+        if comparison.get("excluded"):
+            st.caption("Not compared: " + "; ".join(
+                f"{MODEL_LABELS.get(n, n)} ({why})" for n, why in comparison["excluded"].items()))
+        band = pd.DataFrame([{
+            "Years ahead": r["year"],
+            "Past tests": r["windows"],
+            "Monthly error": f"{r['model_mape_monthly']:.1f}%",
+            "80% band, annual": f"±{r['band_annual'] * 100:.0f}%",
+        } for r in rows])
+        st.caption(f"{chosen['label']}: monthly error and the band used.")
+        st.dataframe(band, use_container_width=True, hide_index=True)
 
 
 def render_forecast(basin: str, fuel_type: str, target_year: int, _wti: float) -> None:

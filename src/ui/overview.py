@@ -15,8 +15,7 @@ from agents.tools import execute_tool
 from data.loader import load_production_no_cache
 from data.usgs_loader import get_resource_assessment, resource_adequacy_years, all_assessments_df
 from data.bsee_loader import get_offshore_context
-from kpi.metrics import DEFAULT_HENRY_HUB, basin_kpi_summary, price_assumption_text
-from models.forecaster import forecast_basin as _fit
+from kpi.metrics import DEFAULT_HENRY_HUB, price_assumption_text
 from ui.hero import render_hero
 from ui.theme import ACCENT, ACCENT_SOFT, GRID, MUTED, SERIES, TRANSPARENT, score_color, style_figure, with_alpha
 
@@ -39,9 +38,14 @@ def _kpi_for_basin(
     bdf = df[df["basin"] == basin][["ds", "y"]].dropna().copy()
     if bdf.empty:
         return None
-    cutoff = int(bdf["ds"].dt.year.max())
-    result = _fit(bdf, cutoff, target_year, basin=basin, fuel_type=fuel_type)
-    return basin_kpi_summary(result, target_year, wti_price=wti, henry_hub=henry_hub)
+    out = execute_tool(
+        "get_kpi_snapshot",
+        {"basin": basin, "fuel_type": fuel_type, "target_year": target_year,
+         "wti_assumption": wti, "henry_hub_assumption": henry_hub},
+    )
+    if "error" in out:
+        raise RuntimeError(out["error"])
+    return out
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -496,7 +500,7 @@ def render_overview(
             else "YoY Growth"
         )
         yoy_help = (
-            f"Forecast-based: Prophet {yoy_year} vs {yoy_year - 1} projections."
+            f"Forecast-based ({kpi.get('forecast_model', 'forecast')}): {yoy_year} vs {yoy_year - 1}."
             if is_forecast_yoy
             else f"Actual EIA data: {yoy_year} vs {yoy_year - 1}."
         ) if yoy_year else "Year-over-year % change"
@@ -534,7 +538,8 @@ def render_overview(
 
     # --- Basin comparison ---
     st.subheader(f"Basin comparison · {fuel_type.title()} · {target_year}", anchor=False)
-    st.caption("First load fits Prophet for all 6 basins — allow ~2 min. Subsequent loads are cached for 1 h.")
+    st.caption("First load backtests three forecast models for all 6 basins, which can take a minute. "
+               "Later loads are cached.")
 
     with st.spinner("Fitting forecasts for all 6 basins…"):
         try:

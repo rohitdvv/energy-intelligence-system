@@ -14,7 +14,7 @@ from typing import Callable
 
 import pandas as pd
 
-from data.eia import BASINS, EIAClient
+from data.eia import BASINS, DRIVER_COLUMNS, STEO_REGIONS, EIAClient
 from data.fred import FREDClient
 
 logger = logging.getLogger(__name__)
@@ -127,6 +127,35 @@ def load_production_no_cache(
         fuel_type, len(combined), present,
     )
     return combined.sort_values(["basin", "ds"]).reset_index(drop=True)
+
+
+DRIVERS_CACHE_VERSION = "v1"
+
+
+def drivers_path(fuel_type: str, basin: str) -> Path:
+    return _RAW_DIR / f"eia_drivers_{fuel_type}_{_basin_slug(basin)}_{DRIVERS_CACHE_VERSION}.parquet"
+
+
+def load_drivers_no_cache(fuel_type: str, basin: str, live_fetch: bool = True) -> pd.DataFrame:
+    """EIA new-well and legacy-change rates for one basin (empty if EIA has none).
+
+    Columns: ds, new_well, legacy_change. See EIAClient.fetch_drivers.
+    """
+    empty = pd.DataFrame(columns=DRIVER_COLUMNS)
+    if basin not in STEO_REGIONS:
+        return empty
+    path = drivers_path(fuel_type, basin)
+    df = _read_parquet(path)
+    if df is None and live_fetch:
+        try:
+            df = _fetch_and_save(lambda: EIAClient().fetch_drivers(basin, fuel_type), path)
+        except Exception as exc:
+            logger.warning("Driver fetch failed — %s %s: %s", fuel_type, basin, exc)
+    if df is None or df.empty:
+        return empty
+    df = df.copy()
+    df["ds"] = pd.to_datetime(df["ds"])
+    return df[DRIVER_COLUMNS].sort_values("ds").reset_index(drop=True)
 
 
 def load_wti_no_cache(live_fetch: bool = True) -> pd.DataFrame:

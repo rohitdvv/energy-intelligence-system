@@ -21,7 +21,7 @@
 ### Data & ML Layer
 - EIA API v2 with retry/backoff; partial month detection; VGM process filter for gas
 - FRED WTI price integration
-- Prophet multiplicative seasonality forecasting with 80% CI
+- Three forecast models (Prophet, EIA well activity, repeat last year), chosen per basin and horizon by rolling backtest, with an 80% band from past errors
 - XGBoost recursive forecaster built (lag features, rolling stats, cyclic calendar encoding) — retained in codebase but not shown in UI to keep chart clean
 - Held-out MAPE backtest for Prophet validation
 
