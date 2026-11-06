@@ -9,6 +9,8 @@ import streamlit as st
 from agents.committee import Committee
 from agents.prompts import BEAR_SYSTEM_PROMPT, BULL_SYSTEM_PROMPT, PM_SYSTEM_PROMPT
 from agents.tools import TOOL_SPECS
+from ui.access import has_access
+from ui.usage_limits import daily_public_run_limit, remaining_public_runs, try_start_public_run
 
 
 # ------------------------------------------------------------------
@@ -56,19 +58,19 @@ def _run_debate(
 
     t0 = time.time()
     try:
-        with st.status("🏛️ Investment committee in session…", expanded=True) as status:
-            status.write("🐂 **Bull analyst** gathering production data and building thesis…")
+        with st.status("Investment committee in session…", expanded=True) as status:
+            status.write("**Bull analyst** is gathering production data and building the case…")
             bull = committee.run_agent(BULL_SYSTEM_PROMPT, context, TOOL_SPECS, agent="bull")
 
             status.write(
-                f"🐂 Bull complete ({len(bull['tool_calls'])} tool calls).  \n"
-                "🐻 **Bear analyst** investigating anomalies and risks…"
+                f"Bull analyst finished ({len(bull['tool_calls'])} tool calls).  \n"
+                "**Bear analyst** is investigating anomalies and risks…"
             )
             bear = committee.run_agent(BEAR_SYSTEM_PROMPT, context, TOOL_SPECS, agent="bear")
 
             status.write(
-                f"🐻 Bear complete ({len(bear['tool_calls'])} tool calls).  \n"
-                "👔 **Portfolio Manager** deliberating…"
+                f"Bear analyst finished ({len(bear['tool_calls'])} tool calls).  \n"
+                "**Portfolio manager** is deciding…"
             )
             pm = committee.run_agent(
                 PM_SYSTEM_PROMPT,
@@ -80,7 +82,7 @@ def _run_debate(
             total = len(bull["tool_calls"]) + len(bear["tool_calls"]) + len(pm["tool_calls"])
             elapsed = round(time.time() - t0, 1)
             status.update(
-                label=f"✅ Debate complete — {total} tool calls · {elapsed}s",
+                label=f"Debate complete · {total} tool calls · {elapsed}s",
                 state="complete",
             )
 
@@ -99,7 +101,7 @@ def _run_debate(
         }
 
     except Exception as exc:
-        st.error(f"Committee debate failed: {exc}", icon="🚨")
+        st.error(f"Committee debate failed: {exc}", icon=":material/error:")
 
 
 def _render_tool_calls(tool_calls: list[dict[str, Any]]) -> None:
@@ -115,15 +117,15 @@ def _render_tool_calls(tool_calls: list[dict[str, Any]]) -> None:
 
 def _render_agent_section(
     agent: dict[str, Any],
-    emoji: str,
+    icon: str,
     label: str,
     expanded: bool = False,
 ) -> None:
-    with st.expander(f"{emoji} {label}", expanded=expanded):
+    with st.expander(label, icon=icon, expanded=expanded):
         st.markdown(agent["text_response"] or "_No response returned._")
         calls = agent.get("tool_calls", [])
         if calls:
-            with st.expander(f"🔧 Tool calls used ({len(calls)})"):
+            with st.expander(f"Tool calls used ({len(calls)})", icon=":material/build:"):
                 _render_tool_calls(calls)
 
 
@@ -133,19 +135,17 @@ def _render_results(result: dict[str, Any]) -> None:
     verdict = Committee.parse_pm_verdict(pm_text)
 
     # Trust panel
-    _VERDICT_ICON = {"PURSUE": "🟢", "PASS": "🔴", "WATCH": "🟡"}
     v = verdict.get("verdict", "")
-    icon = _VERDICT_ICON.get(v, "⚪")
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Verdict",    f"{icon} {v or 'N/A'}")
+    c1.metric("Recommendation", v or "N/A")
     c2.metric("Conviction", verdict.get("conviction") or "N/A")
     c3.metric("Tool Calls", meta.get("total_tool_calls", "N/A"))
     c4.metric("Latency",    f"{meta.get('latency_seconds','?')}s")
 
     rationale = verdict.get("rationale", "")
     if rationale:
-        st.info(rationale, icon="👔")
+        st.info(rationale, icon=":material/gavel:")
 
     if verdict.get("top_opportunity") or verdict.get("top_risk"):
         col_a, col_b = st.columns(2)
@@ -155,9 +155,9 @@ def _render_results(result: dict[str, Any]) -> None:
     st.divider()
 
     # Agent sections
-    _render_agent_section(result["bull"], "🐂", "Bull Analyst — Riley Chen", expanded=False)
-    _render_agent_section(result["bear"], "🐻", "Bear Analyst — Marcus Webb", expanded=False)
-    _render_agent_section(result["pm"],   "👔", "Portfolio Manager Verdict",  expanded=True)
+    _render_agent_section(result["bull"], ":material/trending_up:", "Bull analyst (simulated persona)", expanded=False)
+    _render_agent_section(result["bear"], ":material/trending_down:", "Bear analyst (simulated persona)", expanded=False)
+    _render_agent_section(result["pm"], ":material/gavel:", "Portfolio manager recommendation", expanded=True)
 
 
 # ------------------------------------------------------------------
@@ -175,12 +175,18 @@ def render_committee(
     key = _debate_key(basin, fuel_type, target_year)
     cached = st.session_state.get(key)
 
-    col_btn, col_hint = st.columns([1, 3])
+    owner = has_access("ai")
+    limit = daily_public_run_limit()
+    remaining = None if owner else remaining_public_runs()
+
+    col_btn, col_hint = st.columns([1, 3], vertical_alignment="center")
     with col_btn:
         run = st.button(
-            "🏛️ Run Investment Committee",
+            "Run Investment Committee",
+            icon=":material/play_arrow:",
             type="primary",
             use_container_width=True,
+            disabled=remaining == 0,
         )
     with col_hint:
         if cached:
@@ -193,12 +199,23 @@ def render_committee(
             )
         else:
             st.caption(
-                "Runs Bull, Bear, and PM agents sequentially (~45–90 s). "
-                "Results are cached per basin / fuel / year combination."
+                "Runs the bull, bear and portfolio manager agents in turn (about 45 to 90 s). "
+                "Results are kept per basin, fuel and year for this session."
+            )
+        if remaining is not None:
+            st.caption(
+                f"Public runs left today: **{remaining} of {limit}**. Resets at midnight UTC."
+                if limit else "Public runs are turned off on this deployment."
             )
 
     if run:
-        _run_debate(basin, fuel_type, target_year, wti, client, key)
+        if owner or try_start_public_run():
+            _run_debate(basin, fuel_type, target_year, wti, client, key)
+        else:
+            st.warning(
+                "Today's public run limit has been reached. It resets at midnight UTC.",
+                icon=":material/hourglass_top:",
+            )
 
     result = st.session_state.get(key)
     if result:

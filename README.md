@@ -48,15 +48,19 @@ Datadog, …). See [`docs/observability.md`](./docs/observability.md).
 
 ### Access codes
 
-The data views are public. Two features stay locked until you set a code of at
-least 16 characters in the app's secrets:
+The data views and the Investment Committee are public. The Committee makes
+paid Claude calls, so public runs are capped per day (20 by default, resetting
+at midnight UTC). Two features stay locked until you set a code of at least 16
+characters in the app's secrets:
 
-| Secret | Unlocks |
+| Secret | Effect |
 |---|---|
-| `AI_ACCESS_CODE` | Chat and Committee, which make paid Claude calls |
-| `OBSERVATORY_ACCESS_CODE` | The Observatory, which shows activity from every viewer |
+| `AI_ACCESS_CODE` | Unlocks the AI Analyst chat, and lets that session run the Committee without the daily cap |
+| `OBSERVATORY_ACCESS_CODE` | Unlocks the Observatory, which shows activity from every viewer |
+| `COMMITTEE_DAILY_RUN_LIMIT` | Optional. Public Committee runs per day; `0` turns public runs off |
 
-Changing a code signs out every session that used the old one.
+Changing a code signs out every session that used the old one. The daily count
+is kept in memory, so it also resets when the app restarts.
 
 ### Tests
 
