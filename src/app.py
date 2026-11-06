@@ -3,98 +3,20 @@
 A decision-support tool for U.S. oil & gas investment analysis powered by real
 EIA / FRED data, Prophet forecasting, and a multi-agent Claude AI committee that
 surfaces regional production KPIs and investment-grade deal memos.
+
+Each section is its own page under a top navigation bar, so only the page being
+viewed runs. Analysis inputs live in a filter bar shared by the pages that use them.
 """
 from __future__ import annotations
+
+from pathlib import Path
 
 import anthropic
 import streamlit as st
 
 from config import check_secrets, get_anthropic_key
 from data.eia import BASINS
-
-_BASIN_DISPLAY: dict[str, str] = {
-    "Permian":     "Permian Basin  (TX · NM)",
-    "Bakken":      "Bakken  (ND)",
-    "Eagle Ford":  "Eagle Ford  (TX)",
-    "Marcellus":   "Marcellus  (PA · WV)",
-    "Haynesville": "Haynesville  (LA)",
-    "Anadarko":    "Anadarko  (OK)",
-    "Appalachian": "Appalachian  (PA · WV · OH)",
-}
-
-_CSS = """
-<style>
-/* ── global background ───────────────────────────────────── */
-.stApp { background: linear-gradient(160deg,#07090f 0%,#0d1117 60%,#0a0e1a 100%); }
-
-/* ── sidebar ─────────────────────────────────────────────── */
-[data-testid="stSidebar"] {
-    background: linear-gradient(180deg,#0c1122 0%,#070a12 100%) !important;
-    border-right: 1px solid rgba(74,144,213,.12);
-}
-
-/* ── metric cards ────────────────────────────────────────── */
-[data-testid="metric-container"] {
-    background: linear-gradient(135deg,#131d30 0%,#0d1520 100%);
-    border: 1px solid rgba(74,144,213,.18);
-    border-radius: 12px;
-    padding: 18px 20px;
-    box-shadow: 0 4px 24px rgba(0,0,0,.35);
-}
-[data-testid="stMetricValue"]  { font-size: 1.45rem !important; font-weight: 700; }
-[data-testid="stMetricLabel"]  { color: rgba(255,255,255,.55) !important; font-size:.8rem; }
-[data-testid="stMetricDelta"]  { font-size: .85rem !important; }
-
-/* ── tabs ────────────────────────────────────────────────── */
-.stTabs [data-baseweb="tab-list"]  { gap:6px; border-bottom:1px solid rgba(255,255,255,.08); }
-.stTabs [data-baseweb="tab"]       { border-radius:8px 8px 0 0; color:rgba(255,255,255,.55); font-weight:600; padding:8px 16px; }
-.stTabs [aria-selected="true"]     { color:#4A90D9 !important; border-bottom:2px solid #4A90D9 !important; background:rgba(74,144,213,.08) !important; }
-
-/* ── buttons ─────────────────────────────────────────────── */
-.stButton>button {
-    background: linear-gradient(135deg,#1a3855,#0f2538);
-    border: 1px solid rgba(74,144,213,.28);
-    border-radius: 8px; color:#d4e5f7; font-weight:500;
-    transition: all .2s;
-}
-.stButton>button:hover { border-color:rgba(74,144,213,.7); background:linear-gradient(135deg,#22476b,#163046); }
-.stButton>button[kind="primary"] { background:linear-gradient(135deg,#e8622a,#c94d18); border:none; }
-
-/* ── chat messages ───────────────────────────────────────── */
-[data-testid="stChatMessage"] {
-    background: rgba(18,26,44,.75);
-    border: 1px solid rgba(74,144,213,.10);
-    border-radius: 12px;
-    margin: 6px 0;
-    padding: 4px 8px;
-}
-
-/* ── dataframe ───────────────────────────────────────────── */
-[data-testid="stDataFrame"] { border-radius: 10px; overflow:hidden; }
-
-/* ── expanders ───────────────────────────────────────────── */
-[data-testid="stExpander"] summary {
-    color: rgba(255,255,255,.65);
-    font-size: .85rem;
-}
-
-/* ── info / success boxes ────────────────────────────────── */
-.stInfo    { background:rgba(74,144,213,.08); border-color:rgba(74,144,213,.3); border-radius:8px; }
-.stSuccess { background:rgba(76,175,80,.08);  border-color:rgba(76,175,80,.3);  border-radius:8px; }
-.stWarning { background:rgba(255,152,0,.08);  border-color:rgba(255,152,0,.3);  border-radius:8px; }
-
-/* ── divider ─────────────────────────────────────────────── */
-hr { border-color:rgba(255,255,255,.07) !important; }
-
-/* ── chat input ──────────────────────────────────────────── */
-[data-testid="stChatInput"] textarea {
-    background: #111827 !important;
-    border: 1px solid rgba(74,144,213,.25) !important;
-    border-radius: 10px !important;
-    color: #e2e8f0 !important;
-}
-</style>
-"""
+from data.loader import load_production
 from ui.access import require_access
 from ui.chat import render_chat
 from ui.committee import render_committee
@@ -104,10 +26,30 @@ from ui.map import render_map
 from ui.memo import render_memo
 from ui.observatory import render_observatory
 from ui.overview import render_overview
+from ui.theme import APP_CSS, page_header
+
+_ASSETS = Path(__file__).resolve().parent / "assets"
+
+_BASIN_DISPLAY: dict[str, str] = {
+    "Permian":     "Permian (TX · NM)",
+    "Bakken":      "Bakken (ND)",
+    "Eagle Ford":  "Eagle Ford (TX)",
+    "Marcellus":   "Marcellus (PA · WV)",
+    "Haynesville": "Haynesville (LA)",
+    "Anadarko":    "Anadarko (OK)",
+    "Appalachian": "Appalachian (PA · WV · OH)",
+}
+
+_FILTER_DEFAULTS: dict[str, object] = {
+    "basin": BASINS[0],
+    "fuel_type": "oil",
+    "target_year": 2028,
+    "wti": 75.0,
+}
 
 
 # ------------------------------------------------------------------
-# Shared resources (initialised once per Streamlit process)
+# Shared resources and state
 # ------------------------------------------------------------------
 
 @st.cache_resource
@@ -116,120 +58,169 @@ def _anthropic_client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=get_anthropic_key())
 
 
-# ------------------------------------------------------------------
-# Sidebar
-# ------------------------------------------------------------------
+def _init_filter_state() -> None:
+    """Keep filter values when moving to a page that does not show the filter bar.
 
-def _sidebar() -> tuple[str, str, int, float]:
-    # Apply any pending basin selection from the map tab.
-    # This must happen BEFORE the selectbox widget is instantiated so that
-    # Streamlit picks up the new value on this render pass.
+    Streamlit forgets a widget's value on any run where the widget is not drawn,
+    so the values are re-stored every run. Widgets then read them by key.
+    """
+    for key, default in _FILTER_DEFAULTS.items():
+        st.session_state[key] = st.session_state.get(key, default)
+    # A basin clicked on the map is staged here, because a widget's value cannot
+    # change after the widget has been drawn in the same run.
     if "_pending_basin" in st.session_state:
         st.session_state["basin"] = st.session_state.pop("_pending_basin")
 
-    with st.sidebar:
-        st.markdown("## ⚡ Energy Intelligence")
-        st.markdown("*U.S. Oil & Gas Investment Analysis*")
-        st.divider()
 
-        basin: str = st.selectbox(
-            "Basin",
-            BASINS,
-            key="basin",
-            format_func=lambda b: _BASIN_DISPLAY.get(b, b),
-        )
-        fuel_type: str = st.radio("Fuel type", ["oil", "gas"], horizontal=True)
-        target_year: int = st.slider("Target year", 2015, 2030, 2028)
-        wti: float = st.number_input(
-            "WTI assumption ($/bbl)",
-            min_value=40.0,
-            max_value=150.0,
-            value=75.0,
-            step=1.0,
-        )
+def _context() -> tuple[str, str, int, float]:
+    s = st.session_state
+    return s["basin"], s["fuel_type"], int(s["target_year"]), float(s["wti"])
 
-        st.divider()
-        if st.button(
-            "🔄 Refresh data",
+
+def _filter_bar() -> None:
+    with st.container(border=True):
+        c_basin, c_fuel, c_year, c_wti, c_refresh = st.columns(
+            [2.2, 1.3, 2.4, 1.4, 1.0], vertical_alignment="bottom"
+        )
+        c_basin.selectbox(
+            "Basin", BASINS, key="basin", format_func=lambda b: _BASIN_DISPLAY.get(b, b)
+        )
+        c_fuel.radio(
+            "Fuel", ["oil", "gas"], key="fuel_type", horizontal=True, format_func=str.title
+        )
+        c_year.slider("Target year", 2015, 2030, key="target_year")
+        c_wti.number_input(
+            "WTI ($/bbl)", min_value=40.0, max_value=150.0, step=1.0, key="wti"
+        )
+        if c_refresh.button(
+            "Refresh",
+            icon=":material/refresh:",
             use_container_width=True,
-            help="Clears all @st.cache_data results and reruns the app.",
+            help="Reload source data and recompute everything.",
         ):
             st.cache_data.clear()
             st.rerun()
 
-        st.caption(
-            "Data: EIA Open Data API · FRED  \n"
-            "Forecast: Facebook Prophet  \n"
-            "AI: Anthropic Claude"
-        )
 
-    return basin, fuel_type, target_year, wti
+def _data_through(fuel_type: str) -> str | None:
+    try:
+        df = load_production(fuel_type=fuel_type)
+    except Exception:
+        return None
+    return None if df.empty else df["ds"].max().strftime("%b %Y")
 
 
 # ------------------------------------------------------------------
-# Main
+# Pages
 # ------------------------------------------------------------------
+
+def _overview_page() -> None:
+    basin, fuel_type, target_year, wti = _context()
+    render_overview(basin, fuel_type, target_year, wti, data_through=_data_through(fuel_type))
+
+
+def _eyebrow() -> str:
+    basin, fuel_type, target_year, _ = _context()
+    return f"{basin} · {fuel_type.title()} · {target_year}"
+
+
+def _forecast_page() -> None:
+    page_header(
+        eyebrow=_eyebrow(),
+        title="Forecast",
+        description="Monthly production history and a Prophet forecast with an 80% band. "
+        "Move the cutoff to see how the forecast changes.",
+    )
+    render_forecast(*_context())
+
+
+def _map_page() -> None:
+    page_header("Map", "Click a basin to select it on every page.", eyebrow=_eyebrow())
+    render_map(*_context())
+
+
+def _committee_page() -> None:
+    basin, fuel_type, target_year, wti = _context()
+    page_header(
+        eyebrow=_eyebrow(),
+        title="Investment Committee",
+        description="A bull and a bear analyst argue the case with live data, then a portfolio "
+        "manager makes a recommendation. AI output for research, not investment advice.",
+    )
+    render_committee(basin, fuel_type, target_year, wti, _anthropic_client())
+
+
+def _memo_page() -> None:
+    basin, fuel_type, target_year, _ = _context()
+    page_header("Deal Memo", "A memo built from the latest Committee run, with a PDF download.",
+                eyebrow=_eyebrow())
+    render_memo(basin, fuel_type, target_year)
+
+
+def _economics_page() -> None:
+    basin, fuel_type, _, wti = _context()
+    page_header(
+        eyebrow=_eyebrow(),
+        title="Well Economics",
+        description="Single-well decline curve and discounted cash flow. Inputs are illustrative "
+        "basin defaults; edit them to match your case.",
+    )
+    render_economics(basin, fuel_type, wti)
+
+
+def _analyst_page() -> None:
+    page_header("AI Analyst", "Ask questions in plain English, answered from live EIA data.")
+    if require_access("ai", form_key="chat"):
+        render_chat(_anthropic_client())
+
+
+def _observatory_page() -> None:
+    page_header(
+        "Observatory",
+        "Latency, errors, token usage and spend for the AI agents and data APIs.",
+    )
+    if require_access("observatory", form_key="observatory"):
+        render_observatory()
+
 
 def main() -> None:
     st.set_page_config(
-        page_title="Energy Intelligence System",
-        page_icon="⚡",
+        page_title="Energy Intelligence",
+        page_icon=str(_ASSETS / "mark.svg"),
         layout="wide",
+        initial_sidebar_state="collapsed",
     )
-
-    st.markdown(_CSS, unsafe_allow_html=True)
+    st.html(APP_CSS)
+    st.logo(str(_ASSETS / "logo.svg"), size="large")
     check_secrets()
+    _init_filter_state()
 
-    basin, fuel_type, target_year, wti = _sidebar()
-    client = _anthropic_client()
+    # The default page lives at the site root, so it takes no url_path.
+    analysis_pages = [
+        st.Page(_overview_page, title="Overview", icon=":material/space_dashboard:", default=True),
+        st.Page(_forecast_page, title="Forecast", icon=":material/show_chart:", url_path="forecast"),
+        st.Page(_map_page, title="Map", icon=":material/map:", url_path="map"),
+        st.Page(_committee_page, title="Committee", icon=":material/groups:", url_path="committee"),
+        st.Page(_memo_page, title="Memo", icon=":material/description:", url_path="memo"),
+        st.Page(_economics_page, title="Economics", icon=":material/calculate:", url_path="economics"),
+    ]
+    other_pages = [
+        st.Page(_analyst_page, title="AI Analyst", icon=":material/forum:", url_path="analyst"),
+        st.Page(_observatory_page, title="Observatory", icon=":material/monitoring:",
+                url_path="observatory"),
+    ]
+    page = st.navigation(analysis_pages + other_pages, position="top")
 
-    st.title("Energy Intelligence System")
+    if page.title in {p.title for p in analysis_pages}:
+        _filter_bar()
+    page.run()
+
+    st.divider()
     st.caption(
-        f"**{basin}** · {fuel_type.upper()} · "
-        f"Target year **{target_year}** · WTI **${wti:.0f}/bbl**"
+        "Sources: EIA Open Data, FRED, USGS National Oil & Gas Assessment, BSEE. "
+        "Basin figures add up state-level EIA data, so basins that share a state overlap. "
+        "For research only, not investment advice."
     )
-
-    (
-        tab_ov, tab_fc, tab_map, tab_chat, tab_co, tab_me, tab_econ, tab_obs
-    ) = st.tabs(
-        [
-            "📊 Overview",
-            "📈 Forecast",
-            "🗺️ Map",
-            "💬 Chat",
-            "🏛️ Committee",
-            "📄 Memo",
-            "💰 Economics",
-            "🔭 Observatory",
-        ]
-    )
-
-    with tab_ov:
-        render_overview(basin, fuel_type, target_year, wti)
-
-    with tab_fc:
-        render_forecast(basin, fuel_type, target_year, wti)
-
-    with tab_map:
-        render_map(basin, fuel_type, target_year, wti)
-
-    with tab_chat:
-        if require_access("ai", form_key="chat"):
-            render_chat(client)
-
-    with tab_co:
-        if require_access("ai", form_key="committee"):
-            render_committee(basin, fuel_type, target_year, wti, client)
-
-    with tab_me:
-        render_memo(basin, fuel_type, target_year)
-
-    with tab_econ:
-        render_economics(basin, fuel_type, wti)
-
-    with tab_obs:
-        if require_access("observatory", form_key="observatory"):
-            render_observatory()
 
 
 if __name__ == "__main__":
