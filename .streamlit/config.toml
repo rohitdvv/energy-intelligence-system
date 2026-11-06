@@ -1,9 +1,34 @@
 [theme]
-base = "dark"
-primaryColor = "#FF6B35"
-backgroundColor = "#0E1117"
-secondaryBackgroundColor = "#1A1D24"
-textColor = "#FAFAFA"
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+headingFont = "Archivo:https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&display=swap"
+codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+baseFontSize = 15
+baseRadius = "0.625rem"
+buttonRadius = "0.5rem"
+showWidgetBorder = true
+headingFontWeights = [700, 600, 600, 600, 600, 600]
+headingFontSizes = ["1.75rem", "1.3rem", "1.1rem", "1rem", "0.95rem", "0.9rem"]
+metricValueFontSize = "1.55rem"
+metricValueFontWeight = 600
+chartCategoricalColors = ["#E8692A", "#3A7BD5", "#E9A23B", "#159AA8", "#8A63D2", "#1F9D6A", "#6E8295"]
+
+[theme.light]
+primaryColor = "#D9581C"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F6F4F1"
+textColor = "#17130F"
+borderColor = "#E8E3DC"
+linkColor = "#C24D16"
+dataframeHeaderBackgroundColor = "#F6F4F1"
+
+[theme.dark]
+primaryColor = "#F27C3F"
+backgroundColor = "#0E0C0A"
+secondaryBackgroundColor = "#1A1613"
+textColor = "#EEE8E1"
+borderColor = "#2F2A25"
+linkColor = "#F59B62"
+dataframeHeaderBackgroundColor = "#1A1613"
 
 [server]
 headless = true

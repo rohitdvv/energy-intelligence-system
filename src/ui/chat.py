@@ -25,6 +25,8 @@ import anthropic
 import plotly.graph_objects as go
 import streamlit as st
 
+from ui.theme import ORANGE, style_figure
+
 from agents.chat_agent import ChatAgent
 
 _EXAMPLES: list[str] = [
@@ -76,15 +78,10 @@ def _try_compare_basins(tc: dict[str, Any]) -> go.Figure | None:
         textposition="outside",
         hovertemplate="<b>%{x}</b><br>Production: %{y:,.0f} " + unit + "<extra></extra>",
     ))
+    style_figure(fig, height=260, margin=dict(t=36, b=36, l=0, r=60))
     fig.update_layout(
-        title=dict(text="Basin Production Ranking", font=dict(size=13)),
+        title=dict(text="Basin production ranking", font=dict(size=13)),
         yaxis_title=unit,
-        template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(18,26,44,.5)",
-        height=260,
-        margin=dict(t=36, b=36, l=0, r=60),
-        font=dict(size=11),
         showlegend=False,
     )
     return fig
@@ -111,21 +108,16 @@ def _try_forecast_basin(tc: dict[str, Any]) -> go.Figure | None:
         y=[total],
         error_y=dict(type="data", symmetric=False,
                      array=[upper - total], arrayminus=[total - lower]),
-        marker_color="#FF6B35",
+        marker_color=ORANGE,
         width=0.4,
         hovertemplate=f"<b>{basin}</b><br>Projected: {{y:,.0f}} {unit}<br>"
                       f"80% CI: {lower:,.0f} – {upper:,.0f}<extra></extra>",
     ))
     cagr_note = f"  |  Historical CAGR {cagr:+.1f}%" if cagr is not None else ""
+    style_figure(fig, height=220, margin=dict(t=36, b=20, l=8, r=8))
     fig.update_layout(
         title=dict(text=f"Forecast: {basin} {year}{cagr_note}", font=dict(size=13)),
         yaxis_title=unit,
-        template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(18,26,44,.5)",
-        height=220,
-        margin=dict(t=36, b=20),
-        font=dict(size=11),
         showlegend=False,
     )
     return fig
@@ -183,12 +175,9 @@ def render_chat(client: anthropic.Anthropic) -> None:
     if "chat_messages" not in st.session_state:
         st.session_state.chat_messages = []
 
-    st.subheader("AI Energy Analyst")
     st.caption(
-        "Ask anything about U.S. basin production, forecasts, and KPIs. "
-        "The analyst fetches **live EIA data** before responding.  \n"
-        "**[DATA]** = verified from live source &nbsp;·&nbsp; "
-        "**[INFERENCE]** = model-generated estimate"
+        "**[DATA]** marks figures the agent took from a data tool; "
+        "**[INFERENCE]** marks its own estimates. The agent assigns these tags itself."
     )
 
     # ── Example prompts (only when conversation is empty) ──────────────────

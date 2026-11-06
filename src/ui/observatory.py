@@ -11,16 +11,17 @@ import plotly.express as px
 import streamlit as st
 
 from observability import get_telemetry
+from ui.theme import ACCENT, FONT_FAMILY, GREEN, ORANGE, RED, TRANSPARENT
 
-_ACCENT = "#4A90D9"
-_ORANGE = "#e8622a"
-_GREEN = "#4CAF50"
-_RED = "#e05260"
+_ACCENT = ACCENT
+_ORANGE = ORANGE
+_GREEN = GREEN
+_RED = RED
 
 _PLOTLY_LAYOUT = dict(
-    paper_bgcolor="rgba(0,0,0,0)",
-    plot_bgcolor="rgba(0,0,0,0)",
-    font=dict(color="rgba(255,255,255,.75)"),
+    paper_bgcolor=TRANSPARENT,
+    plot_bgcolor=TRANSPARENT,
+    font=dict(family=FONT_FAMILY),
     margin=dict(l=10, r=10, t=40, b=10),
     height=300,
 )
@@ -70,7 +71,7 @@ def _empty_state() -> None:
         "No telemetry captured yet. Interact with the app — run a **Committee "
         "debate**, ask the **Chat** agent a question, or refresh data — and the "
         "LLM and API activity will stream in here.",
-        icon="🔭",
+        icon=":material/monitoring:",
     )
 
 
@@ -109,7 +110,7 @@ def _llm_section(df: pd.DataFrame) -> None:
         st.caption("No LLM calls recorded yet.")
         return
 
-    st.markdown("#### 🤖 LLM cost & tokens")
+    st.markdown("#### AI cost and tokens")
     left, right = st.columns(2)
 
     with left:
@@ -159,7 +160,7 @@ def _llm_section(df: pd.DataFrame) -> None:
             fig.update_layout(**_PLOTLY_LAYOUT)
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.success("No LLM retries — all calls succeeded first try.", icon="✅")
+            st.success("No retries. Every AI call succeeded on the first attempt.", icon=":material/check_circle:")
 
 
 def _api_section(df: pd.DataFrame) -> None:
@@ -168,7 +169,7 @@ def _api_section(df: pd.DataFrame) -> None:
         st.caption("No external API calls recorded yet.")
         return
 
-    st.markdown("#### 🌐 External data APIs")
+    st.markdown("#### Data APIs")
     left, right = st.columns(2)
 
     with left:
@@ -199,7 +200,7 @@ def _tool_section(df: pd.DataFrame) -> None:
     tool = df[df["category"] == "tool"]
     if tool.empty:
         return
-    st.markdown("#### 🛠️ Agent tools")
+    st.markdown("#### Agent tools")
     agg = (
         tool.groupby("name")
         .agg(
@@ -217,13 +218,13 @@ def _tool_section(df: pd.DataFrame) -> None:
 def _recent_and_errors(df: pd.DataFrame) -> None:
     errors = df[~df["success"]]
     if not errors.empty:
-        st.markdown("#### 🚨 Recent errors")
+        st.markdown("#### Recent errors")
         st.dataframe(
             errors[["ts", "category", "name", "error"]].tail(20).iloc[::-1],
             use_container_width=True, hide_index=True,
         )
 
-    with st.expander(f"📜 Event log ({len(df)} events in buffer)", expanded=False):
+    with st.expander(f"Event log ({len(df)} events in buffer)", icon=":material/list:", expanded=False):
         cols = [c for c in ["ts", "category", "name", "duration_ms", "success",
                             "source", "agent", "cost_usd", "status_code"] if c in df]
         st.dataframe(
@@ -236,21 +237,16 @@ def render_observatory() -> None:
     """Render the Observatory telemetry dashboard."""
     tel = get_telemetry()
 
-    head_l, head_r = st.columns([3, 1])
-    with head_l:
-        st.subheader("🔭 Observatory")
-        st.caption(
-            "Live telemetry for the LLM committee/chat and external data APIs — "
-            "latency, retries, token usage and estimated spend."
-        )
-    with head_r:
-        ext = "🟢 connected" if tel.external_active else "⚪ local only"
-        store = "🟢 DuckDB" if tel.persistent_active else "🧠 in-memory"
-        st.metric("External export (OTLP)", ext)
-        st.metric("Store", store, help=tel.persistent_path or "OBS_DUCKDB_PATH unset")
-        if st.button("Clear history", use_container_width=True):
-            tel.clear()
-            st.rerun()
+    s_export, s_store, s_clear = st.columns(3, vertical_alignment="bottom")
+    s_export.metric("External export (OTLP)", "Connected" if tel.external_active else "Local only")
+    s_store.metric(
+        "Event store",
+        "DuckDB" if tel.persistent_active else "In memory",
+        help=tel.persistent_path or "OBS_DUCKDB_PATH unset",
+    )
+    if s_clear.button("Clear history", icon=":material/delete:", use_container_width=True):
+        tel.clear()
+        st.rerun()
 
     df = _events_df()
     if df.empty:

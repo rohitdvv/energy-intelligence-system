@@ -11,6 +11,7 @@ import streamlit as st
 from agents.tools import execute_tool
 from data.loader import load_production_no_cache
 from models.forecaster import forecast_basin as _fit
+from ui.theme import FLARE, MUTED, RED, STEEL, TRANSPARENT, style_figure, with_alpha
 
 _NOW_YEAR = datetime.now().year
 
@@ -101,7 +102,7 @@ def _build_chart(
         x=hist["ds"],
         y=hist["y_actual"],
         name="Historical",
-        line=dict(color="#4A90D9", width=2),
+        line=dict(color=STEEL, width=2),
         mode="lines",
         hovertemplate="%{y:,.1f}<extra>Actual</extra>",
     ))
@@ -112,15 +113,15 @@ def _build_chart(
         ci_y = list(fcast["y_upper"]) + list(fcast["y_lower"].iloc[::-1])
         fig.add_trace(go.Scatter(
             x=ci_x, y=ci_y, fill="toself",
-            fillcolor="rgba(255,107,53,0.15)",
-            line=dict(color="rgba(0,0,0,0)"),
+            fillcolor=with_alpha(FLARE, 0.16),
+            line=dict(color=TRANSPARENT),
             name="80% CI", hoverinfo="skip",
         ))
         # Forecast line
         fig.add_trace(go.Scatter(
             x=fcast["ds"], y=fcast["y_forecast"],
             name="Forecast (Prophet)",
-            line=dict(color="#FF6B35", width=2, dash="dash"),
+            line=dict(color=FLARE, width=2.4, dash="dash"),
             mode="lines",
             hovertemplate="%{y:,.1f}<extra>Forecast</extra>",
         ))
@@ -130,7 +131,7 @@ def _build_chart(
     fig.add_vline(
         x=cutoff_ts.timestamp() * 1000,
         line_dash="dash",
-        line_color="rgba(200,200,200,0.35)",
+        line_color=MUTED,
         annotation_text=f"Cutoff: {cutoff_year}",
         annotation_position="top right",
     )
@@ -164,7 +165,7 @@ def _build_chart(
                 x=ax, y=ay,
                 mode="markers",
                 name="Anomaly",
-                marker=dict(color="#FF4444", size=10, symbol="circle",
+                marker=dict(color=RED, size=10, symbol="circle",
                             line=dict(color="white", width=1.5)),
                 hovertemplate="<b>%{text}</b><extra></extra>",
                 text=atxt,
@@ -176,7 +177,9 @@ def _build_chart(
                 key=lambda a: abs(a["z_score"]),
                 reverse=True,
             )[:5]
-            for a in labelled:
+            # Neighbouring months would stack their labels; stagger the heights by date.
+            labelled.sort(key=lambda a: a["date"])
+            for rank, a in enumerate(labelled):
                 val = actual_map[a["date"]]
                 event = a.get("known_event", "")
                 # Truncate long event names to keep chart readable
@@ -190,28 +193,24 @@ def _build_chart(
                     showarrow=True,
                     arrowhead=2,
                     arrowsize=1,
-                    arrowcolor="#FF4444",
+                    arrowcolor=RED,
                     arrowwidth=1.2,
                     ax=0,
-                    ay=-42,
-                    font=dict(size=9, color="#FF9999"),
-                    bgcolor="rgba(18,10,10,.75)",
-                    bordercolor="#FF4444",
+                    ay=-40 - (rank % 3) * 26,
+                    font=dict(size=10, color=RED),
+                    bgcolor=with_alpha(RED, 0.10),
+                    bordercolor=RED,
                     borderwidth=1,
                     borderpad=3,
                 )
 
     unit = "Mbbls/month" if fuel_type == "oil" else "MMcf/month"
+    style_figure(fig, height=480, margin=dict(t=72, b=40, l=8, r=8))
     fig.update_layout(
-        title=f"{basin} {fuel_type.upper()} — Historical & Forecast",
+        title=f"{basin} {fuel_type.title()}: history and forecast",
         xaxis_title="",
         yaxis_title=unit,
-        template="plotly_dark",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(18,26,44,.55)",
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        margin=dict(t=80, b=40),
     )
     return fig
 
@@ -244,7 +243,7 @@ def _interactive_chart(basin: str, fuel_type: str, target_year: int) -> None:
 
     if fc_df is None:
         st.warning(
-            "No production data. Run `python src/data/fetch_all.py` first.", icon="⚠️"
+            "No production data. Run `python src/data/fetch_all.py` first.", icon=":material/warning:"
         )
         return
 
@@ -280,7 +279,7 @@ def render_forecast(basin: str, fuel_type: str, target_year: int, _wti: float) -
     """Render the Forecast tab."""
     _interactive_chart(basin, fuel_type, target_year)
 
-    with st.expander("📖 Forecast methodology"):
+    with st.expander("Forecast methodology", icon=":material/menu_book:"):
         st.markdown(_METHODOLOGY)
 
         st.markdown("---")

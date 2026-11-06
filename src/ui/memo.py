@@ -280,16 +280,17 @@ def render_memo(basin: str, fuel_type: str, target_year: int) -> None:
 
     if not has_committee:
         st.info(
-            "Run the **🏛️ Committee** tab first — the memo is assembled from the "
-            "agents' tool-backed arguments and the PM's verdict.",
-            icon="ℹ️",
+            "Run the **Committee** first. The memo is built from the agents' "
+            "tool-backed arguments and the portfolio manager's recommendation.",
+            icon=":material/info:",
         )
 
     col_gen, col_dl = st.columns([1, 1])
 
     with col_gen:
         generate = st.button(
-            "📄 Generate Deal Memo",
+            "Generate deal memo",
+            icon=":material/description:",
             type="primary",
             disabled=not has_committee,
             use_container_width=True,
@@ -325,14 +326,15 @@ def render_memo(basin: str, fuel_type: str, target_year: int) -> None:
         with col_dl:
             if pdf_bytes:
                 st.download_button(
-                    "⬇️ Download PDF",
+                    "Download PDF",
+                    icon=":material/download:",
                     data=pdf_bytes,
                     file_name=pdf_filename,
                     mime="application/pdf",
                     use_container_width=True,
                 )
             elif st.session_state.get(pdf_err_key):
-                st.error(f"PDF error: {st.session_state[pdf_err_key]}", icon="⚠️")
+                st.error(f"PDF error: {st.session_state[pdf_err_key]}", icon=":material/error:")
             elif debate_result is None:
                 st.caption("Run Committee first to enable PDF.")
             else:

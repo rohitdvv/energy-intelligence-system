@@ -26,7 +26,7 @@ class _Scope:
 
 
 _SCOPES: dict[str, _Scope] = {
-    "ai": _Scope("AI_ACCESS_CODE", "AI analyst and Investment Committee"),
+    "ai": _Scope("AI_ACCESS_CODE", "AI Analyst"),
     "observatory": _Scope("OBSERVATORY_ACCESS_CODE", "Observatory"),
 }
 
@@ -38,6 +38,12 @@ def _configured_code(scope: _Scope) -> str | None:
 
 def _fingerprint(code: str) -> str:
     return hashlib.sha256(code.encode()).hexdigest()
+
+
+def has_access(scope_name: str) -> bool:
+    """True if this session has unlocked the scope with the current code."""
+    code = _configured_code(_SCOPES[scope_name])
+    return code is not None and st.session_state.get(f"_access_{scope_name}") == _fingerprint(code)
 
 
 def require_access(scope_name: str, form_key: str) -> bool:
@@ -55,14 +61,14 @@ def require_access(scope_name: str, form_key: str) -> bool:
             f"The {scope.feature} is locked on this deployment. The owner can turn "
             f"it on by setting `{scope.secret_name}` in the app's secrets "
             f"(at least {_MIN_CODE_LENGTH} characters).",
-            icon="🔒",
+            icon=":material/lock:",
         )
         return False
 
     if st.session_state.get(state_key) == _fingerprint(code):
         return True
 
-    st.info(f"Enter the access code to use the {scope.feature}.", icon="🔒")
+    st.info(f"Enter the access code to use the {scope.feature}.", icon=":material/lock:")
     with st.form(f"access_form_{form_key}", clear_on_submit=True):
         entered = st.text_input(
             "Access code", type="password", key=f"access_code_{form_key}"

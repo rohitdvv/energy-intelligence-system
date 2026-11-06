@@ -15,6 +15,8 @@ import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
 
+from ui.theme import AXIS, FLARE, GRID, MUTED, TRANSPARENT, style_figure
+
 from agents.tools import execute_tool
 from data.eia import BASINS
 
@@ -119,12 +121,12 @@ def _state_choropleth(
         locations=locations,
         z=z_vals,
         locationmode="USA-states",
-        colorscale="Blues",
+        colorscale=[[0.0, "rgba(232,105,42,0.10)"], [1.0, "rgba(232,105,42,0.62)"]],
         showscale=False,
         hoverinfo="skip",
         zmin=min(z_vals),
         zmax=max(z_vals),
-        marker_line_color="rgba(255,255,255,0.25)",
+        marker_line_color=AXIS,
         marker_line_width=0.5,
         colorbar=None,
     )
@@ -188,7 +190,7 @@ def _basin_scatter(
     sizes = 22 + (arr - lo) / span * 28   # 22–50 px
 
     border_colors = [
-        "#FF6B35" if name == selected_basin else "rgba(255,255,255,0.6)"
+        FLARE if name == selected_basin else MUTED
         for name in labels
     ]
     border_widths = [3 if name == selected_basin else 1 for name in labels]
@@ -201,7 +203,7 @@ def _basin_scatter(
         customdata=labels,
         mode="markers+text",
         textposition="top center",
-        textfont=dict(size=10, color="white"),
+        textfont=dict(size=11),
         hovertemplate="%{hovertext}<extra></extra>",
         marker=dict(
             size=sizes,
@@ -215,8 +217,7 @@ def _basin_scatter(
                 thickness=14,
                 len=0.55,
                 x=1.01,
-                titlefont=dict(size=11, color="white"),
-                tickfont=dict(color="white"),
+                titlefont=dict(size=11),
             ),
             showscale=True,
             opacity=0.92,
@@ -236,34 +237,31 @@ def _build_map_figure(
     fig.add_trace(_state_choropleth(ranked, metric))
     fig.add_trace(_basin_scatter(ranked, metric, selected_basin, fuel_type, target_year))
 
+    style_figure(fig, height=500, margin=dict(t=48, b=10, l=0, r=60))
     fig.update_layout(
         title=dict(
             text=(
-                f"{fuel_type.upper()} Production Map — {target_year}  "
-                f"<span style='font-size:12px;color:#aaa'>| overlay: "
+                f"{fuel_type.title()} production, {target_year}  "
+                f"<span style='font-size:12px;opacity:.65'>Overlay: "
                 f"{_OVERLAY_LABELS.get(metric, metric)}</span>"
             ),
-            font=dict(size=14, color="white"),
-            x=0.02,
+            font=dict(size=14),
+            x=0.01,
         ),
         geo=dict(
             scope="usa",
             projection=dict(type="albers usa"),
             showland=True,
-            landcolor="#1E2230",
+            landcolor=GRID,
             showlakes=True,
-            lakecolor="#0E1117",
+            lakecolor=TRANSPARENT,
             showcoastlines=True,
-            coastlinecolor="rgba(255,255,255,0.25)",
+            coastlinecolor=AXIS,
             showsubunits=True,
-            subunitcolor="rgba(255,255,255,0.18)",
-            bgcolor="#0E1117",
+            subunitcolor=AXIS,
+            bgcolor=TRANSPARENT,
             showframe=False,
         ),
-        paper_bgcolor="#0E1117",
-        margin=dict(t=55, b=10, l=0, r=60),
-        height=480,
-        font=dict(color="white"),
         showlegend=False,
     )
     return fig
@@ -281,7 +279,7 @@ def _render_kpi_panel(
     wti: float,
 ) -> None:
     """Render KPI metric cards for the selected basin."""
-    st.subheader(f"{basin} — {fuel_type.upper()} KPIs ({target_year})")
+    st.subheader(f"{basin} · {fuel_type.title()} · {target_year}", anchor=False)
 
     basin_data = next((b for b in ranked if b.get("basin") == basin), None)
     if not basin_data:
@@ -331,13 +329,6 @@ def render_map(
     wti: float,
 ) -> None:
     """Render the geographic basin map tab."""
-    st.subheader("U.S. Basin Production Map")
-    st.caption(
-        "Bubble size and colour reflect the selected overlay metric. "
-        "**Click a basin marker** to select it — the KPI panel below and all other "
-        "tabs update automatically to show that basin."
-    )
-
     col_overlay, col_tip = st.columns([1, 3])
     with col_overlay:
         overlay: str = st.selectbox(
@@ -348,9 +339,9 @@ def render_map(
         )
     with col_tip:
         st.info(
-            "Larger bubbles = higher value for the selected overlay.  "
-            "Orange border = currently selected basin.",
-            icon="ℹ️",
+            "Bubble size and colour show the selected overlay. "
+            "The orange ring marks the selected basin.",
+            icon=":material/info:",
         )
 
     with st.spinner("Loading basin data..."):

@@ -17,6 +17,8 @@ from data.usgs_loader import get_resource_assessment, resource_adequacy_years, a
 from data.bsee_loader import get_offshore_context
 from kpi.metrics import basin_kpi_summary
 from models.forecaster import forecast_basin as _fit
+from ui.hero import render_hero
+from ui.theme import ACCENT, ACCENT_SOFT, GRID, MUTED, SERIES, TRANSPARENT, score_color, style_figure, with_alpha
 
 
 # ------------------------------------------------------------------
@@ -62,20 +64,7 @@ def _fmt(val: float | None, prefix: str = "", suffix: str = "") -> str:
 # Render
 # ------------------------------------------------------------------
 
-_PALETTE = [
-    "#4A90D9", "#FF6B35", "#50C878", "#FFD700",
-    "#C084FC", "#F472B6", "#34D399",
-]
-
-_DARK_BG   = "rgba(0,0,0,0)"
-_PLOT_BG   = "rgba(18,26,44,.55)"
-_LAYOUT    = dict(
-    template="plotly_dark",
-    paper_bgcolor=_DARK_BG,
-    plot_bgcolor=_PLOT_BG,
-    font=dict(color="white", size=11),
-    margin=dict(t=30, b=20, l=10, r=10),
-)
+_PALETTE = SERIES
 
 
 def _normalise(values: list[float | None], invert: bool = False) -> list[float]:
@@ -122,7 +111,7 @@ def _render_radar(
             name=bname,
             line=dict(color=color, width=3 if is_sel else 1.2),
             fill="toself",
-            fillcolor=color.replace(")", ",0.18)").replace("rgb", "rgba") if is_sel else "rgba(0,0,0,0)",
+            fillcolor=with_alpha(color, 0.18) if is_sel else TRANSPARENT,
             opacity=1.0 if is_sel else 0.55,
             hovertemplate=(
                 f"<b>{bname}</b><br>"
@@ -131,13 +120,13 @@ def _render_radar(
             ),
         ))
 
+    style_figure(fig)
     fig.update_layout(
-        **_LAYOUT,
         polar=dict(
-            bgcolor="rgba(18,26,44,.4)",
+            bgcolor=TRANSPARENT,
             radialaxis=dict(visible=True, range=[0, 100], tickfont=dict(size=9),
-                            gridcolor="rgba(255,255,255,.12)", linecolor="rgba(255,255,255,.12)"),
-            angularaxis=dict(tickfont=dict(size=10), gridcolor="rgba(255,255,255,.12)"),
+                            gridcolor=GRID, linecolor=GRID),
+            angularaxis=dict(tickfont=dict(size=10), gridcolor=GRID, linecolor=GRID),
         ),
         showlegend=True,
         legend=dict(orientation="h", y=-0.18, font=dict(size=9)),
@@ -172,34 +161,31 @@ def _render_lollipop(
         fig.add_shape(
             type="line",
             x0=0, x1=p, y0=i, y1=i,
-            line=dict(color="#4A90D9" if b == selected else "rgba(255,255,255,.2)", width=2),
+            line=dict(color=ACCENT if b == selected else GRID, width=2),
         )
 
     # Dots
-    dot_colors = [
-        f"rgb({int(255*(1-r/100))},{int(200*(r/100))},60)"
-        for r in rpis
-    ]
+    dot_colors = [score_color(r) for r in rpis]
     fig.add_trace(go.Scatter(
         x=prods, y=list(range(len(basins))),
         mode="markers",
         marker=dict(size=14, color=dot_colors,
-                    line=dict(color="white", width=1.5)),
+                    line=dict(color=MUTED, width=1)),
         text=[f"RPI {r:.0f}" for r in rpis],
         customdata=basins,
         hovertemplate="<b>%{customdata}</b><br>%{x:,.0f} " + unit + "<br>%{text}<extra></extra>",
         showlegend=False,
     ))
 
+    style_figure(fig)
     fig.update_layout(
-        **_LAYOUT,
         height=340,
-        xaxis=dict(title=unit, gridcolor="rgba(255,255,255,.08)", zeroline=False),
+        xaxis=dict(title=unit, gridcolor=GRID, zeroline=False),
         yaxis=dict(
             tickvals=list(range(len(basins))),
             ticktext=[f"<b>{b}</b>" if b == selected else b for b in basins],
             tickfont=dict(size=11),
-            gridcolor="rgba(0,0,0,0)",
+            gridcolor=TRANSPARENT,
         ),
         title=dict(text=f"{fuel_type.upper()} · {target_year}", font=dict(size=11), x=0.5),
     )
@@ -207,10 +193,8 @@ def _render_lollipop(
 
 
 def _rpi_color(rpi: float) -> str:
-    """Red → yellow → green based on RPI 0-100."""
-    r = max(0, min(255, int(255 * (1 - rpi / 100))))
-    g = max(0, min(200, int(200 * (rpi / 100))))
-    return f"rgb({r},{g},60)"
+    """Red → amber → green based on RPI 0-100."""
+    return score_color(rpi)
 
 
 def _render_revenue_bar(
@@ -227,20 +211,20 @@ def _render_revenue_bar(
     order  = sorted(range(len(revs)), key=lambda i: revs[i])
     basins = [basins[i] for i in order]
     revs   = [revs[i] for i in order]
-    colors = ["#4A90D9" if b == selected else "#1e3a5f" for b in basins]
+    colors = [ACCENT if b == selected else ACCENT_SOFT for b in basins]
 
     fig = go.Figure(go.Bar(
         x=revs, y=basins, orientation="h",
         marker_color=colors,
         text=[f"${v:,.0f}M" for v in revs],
         textposition="outside",
-        textfont=dict(size=10, color="white"),
+        textfont=dict(size=10),
         hovertemplate="<b>%{y}</b><br>$%{x:,.0f}M/yr<extra></extra>",
     ))
+    style_figure(fig, margin=dict(t=10, b=20, l=10, r=80))
     fig.update_layout(
-        **{**_LAYOUT, "margin": dict(t=10, b=20, l=10, r=80)},
         height=300,
-        xaxis=dict(title="$M / year", gridcolor="rgba(255,255,255,.08)", zeroline=False),
+        xaxis=dict(title="$M / year", gridcolor=GRID, zeroline=False),
         yaxis=dict(tickfont=dict(size=11)),
     )
     st.plotly_chart(fig, use_container_width=True)
@@ -265,26 +249,26 @@ def _render_rpi_bar(
         x=basins, y=rpis,
         marker_color=colors,
         marker_line=dict(
-            color=["white" if b == selected else "rgba(0,0,0,0)" for b in basins],
+            color=[ACCENT if b == selected else TRANSPARENT for b in basins],
             width=2,
         ),
         text=[f"{r:.0f}" for r in rpis],
         textposition="outside",
-        textfont=dict(size=11, color="white"),
+        textfont=dict(size=11),
         hovertemplate="<b>%{x}</b><br>RPI: %{y:.1f}<extra></extra>",
     ))
     fig.add_hline(
         y=50, line_dash="dot",
-        line_color="rgba(255,255,255,0.3)",
-        annotation_text="Avg",
+        line_color=MUTED,
+        annotation_text="Midpoint",
         annotation_position="right",
-        annotation_font_color="rgba(255,255,255,0.5)",
+        annotation_font_color=MUTED,
     )
+    style_figure(fig, margin=dict(t=10, b=20, l=10, r=10))
     fig.update_layout(
-        **{**_LAYOUT, "margin": dict(t=10, b=20, l=10, r=10)},
         height=300,
         xaxis=dict(tickfont=dict(size=10)),
-        yaxis=dict(range=[0, 110], title="RPI Score", gridcolor="rgba(255,255,255,.08)"),
+        yaxis=dict(range=[0, 110], title="RPI Score", gridcolor=GRID),
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -334,14 +318,13 @@ def _render_bubble(
             marker=dict(
                 size=sizes[i],
                 color=colors[i],
-                line=dict(color="white" if is_sel else "rgba(255,255,255,0.3)",
+                line=dict(color=ACCENT if is_sel else MUTED,
                           width=3 if is_sel else 1),
                 opacity=1.0 if is_sel else 0.85,
             ),
             text=[f"<b>{b}</b>" if is_sel else b],
             textposition="top center",
-            textfont=dict(size=10 if not is_sel else 12,
-                          color="white"),
+            textfont=dict(size=10 if not is_sel else 12),
             hovertemplate=(
                 f"<b>{b}</b><br>"
                 f"Revenue: ${revs[i]:,.0f}M/mo<br>"
@@ -352,19 +335,19 @@ def _render_bubble(
             showlegend=False,
         ))
 
+    style_figure(fig, margin=dict(t=20, b=40, l=20, r=20))
     fig.update_layout(
-        **{**_LAYOUT, "margin": dict(t=20, b=40, l=20, r=20)},
         height=400,
         xaxis=dict(
             title="Revenue Potential ($M / month)",
-            gridcolor="rgba(255,255,255,.08)",
+            gridcolor=GRID,
             zeroline=False,
         ),
         yaxis=dict(
             title="YoY Production Growth (%)",
-            gridcolor="rgba(255,255,255,.08)",
+            gridcolor=GRID,
             zeroline=True,
-            zerolinecolor="rgba(255,255,255,.2)",
+            zerolinecolor=MUTED,
         ),
     )
     st.plotly_chart(fig, use_container_width=True)
@@ -440,8 +423,14 @@ def _render_bsee_section(target_year: int, fuel_type: str) -> None:
     )
 
 
-def render_overview(basin: str, fuel_type: str, target_year: int, wti: float) -> None:
-    """Render the Overview tab."""
+def render_overview(
+    basin: str,
+    fuel_type: str,
+    target_year: int,
+    wti: float,
+    data_through: str | None = None,
+) -> None:
+    """Render the Overview page, led by the animated hero."""
 
     # First-load notice — shown once per session when no local parquet files exist
     if not st.session_state.get("_eis_fetch_banner_shown"):
@@ -449,7 +438,7 @@ def render_overview(basin: str, fuel_type: str, target_year: int, wti: float) ->
         from pathlib import Path
         _raw = Path(__file__).resolve().parents[2] / "data" / "raw"
         if not any(_raw.glob("*.parquet")):
-            st.info("⏳ First-time data fetch from EIA/FRED — this takes about a minute.")
+            st.info("First-time data fetch from EIA and FRED. This takes about a minute.", icon=":material/hourglass_top:")
 
     # --- KPI cards ---
     with st.spinner("Loading KPIs…"):
@@ -457,7 +446,17 @@ def render_overview(basin: str, fuel_type: str, target_year: int, wti: float) ->
             kpi = _kpi_for_basin(basin, fuel_type, target_year, wti)
         except Exception as exc:
             kpi = None
-            st.warning(f"KPI computation failed: {exc}", icon="⚠️")
+            st.warning(f"KPI computation failed: {exc}", icon=":material/warning:")
+
+    hero_ppe = (kpi or {}).get("projected_production") or {}
+    render_hero(
+        basin,
+        fuel_type,
+        target_year,
+        _fmt(hero_ppe.get("value"), suffix=f" {hero_ppe.get('unit', '')}") if hero_ppe.get("value") else None,
+        ((kpi or {}).get("growth_rate") or {}).get("yoy_pct"),
+        data_through,
+    )
 
     c1, c2, c3, c4 = st.columns(4)
     if kpi:
@@ -519,13 +518,13 @@ def render_overview(basin: str, fuel_type: str, target_year: int, wti: float) ->
         st.warning(
             "No production data found for this basin.  \n"
             "Run `python src/data/fetch_all.py` to ingest EIA data.",
-            icon="⚠️",
+            icon=":material/warning:",
         )
 
     st.divider()
 
     # --- Basin comparison ---
-    st.subheader(f"Basin Comparison — {fuel_type.upper()} · {target_year}")
+    st.subheader(f"Basin comparison · {fuel_type.title()} · {target_year}", anchor=False)
     st.caption("First load fits Prophet for all 7 basins — allow ~2 min. Subsequent loads are cached for 1 h.")
 
     with st.spinner("Fitting forecasts for all 7 basins…"):
@@ -548,7 +547,7 @@ def render_overview(basin: str, fuel_type: str, target_year: int, wti: float) ->
                 {"Basin": b["basin"], "Error": b.get("error", "unknown")}
                 for b in errored
             ])
-            st.warning("All 7 basins failed to compute. Details below:", icon="⚠️")
+            st.warning("All 7 basins failed to compute. Details below:", icon=":material/warning:")
             st.dataframe(err_df, use_container_width=True, hide_index=True)
         else:
             st.info("No basin data available yet.")
@@ -631,12 +630,4 @@ def render_overview(basin: str, fuel_type: str, target_year: int, wti: float) ->
     st.divider()
     _render_bsee_section(target_year, fuel_type)
 
-    # ── Data source attribution footer ────────────────────────────────────────
-    st.divider()
-    st.caption(
-        "**Data sources:** "
-        "EIA Open Data API v2 (onshore production) | "
-        "FRED WTISPLC (WTI crude price) | "
-        "USGS National Oil & Gas Assessment (resource base) | "
-        "BSEE/BOEM data.bsee.gov (federal offshore production)"
-    )
+

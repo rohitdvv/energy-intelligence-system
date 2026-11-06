@@ -33,6 +33,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
+from ui.theme import ACCENT, AMBER, GAS, MUTED, style_figure, with_alpha
+
 # ---------------------------------------------------------------------------
 # Per-basin default inputs (rough industry benchmarks for illustration)
 # ---------------------------------------------------------------------------
@@ -176,8 +178,8 @@ def _build_chart(econ: dict[str, Any], years: int) -> go.Figure:
             y=prod_mbbls,
             name="Monthly Production",
             fill="tozeroy",
-            fillcolor="rgba(74,144,213,0.18)",
-            line=dict(color="#4A90D9", width=2),
+            fillcolor=with_alpha(ACCENT, 0.16),
+            line=dict(color=ACCENT, width=2),
             hovertemplate="%{y:.2f} Mbbls<extra></extra>",
         ),
         row=1, col=1,
@@ -189,7 +191,7 @@ def _build_chart(econ: dict[str, Any], years: int) -> go.Figure:
             x=month_labels,
             y=cum_cf_mm,
             name="Cumul. Net CF",
-            line=dict(color="#FF6B35", width=2),
+            line=dict(color=GAS, width=2),
             hovertemplate="$%{y:.1f}MM<extra></extra>",
         ),
         row=1, col=2,
@@ -199,7 +201,7 @@ def _build_chart(econ: dict[str, Any], years: int) -> go.Figure:
     fig.add_hline(
         y=0,
         line_dash="dash",
-        line_color="rgba(255,255,255,0.35)",
+        line_color=MUTED,
         row=1, col=2,
     )
 
@@ -214,22 +216,14 @@ def _build_chart(econ: dict[str, Any], years: int) -> go.Figure:
                 y=[pb_y],
                 mode="markers",
                 name=f"Payback ({pb} mo)",
-                marker=dict(color="gold", size=12, symbol="star"),
+                marker=dict(color=AMBER, size=13, symbol="star"),
                 hovertemplate=f"Payback: {pb} months ({pb/12:.1f} yr)<extra></extra>",
             ),
             row=1, col=2,
         )
 
-    fig.update_layout(
-        template="plotly_dark",
-        paper_bgcolor="#0E1117",
-        plot_bgcolor="#1A1D24",
-        height=360,
-        margin=dict(t=45, b=40, l=60, r=20),
-        legend=dict(orientation="h", yanchor="bottom", y=1.08, x=0),
-        showlegend=True,
-        font=dict(color="white"),
-    )
+    style_figure(fig, height=380, margin=dict(t=60, b=40, l=60, r=20))
+    fig.update_layout(legend=dict(y=1.12), showlegend=True)
     fig.update_yaxes(title_text="Mbbls / month", row=1, col=1)
     fig.update_yaxes(title_text="$MM (cumulative)", row=1, col=2)
     fig.update_xaxes(showgrid=False)
@@ -243,19 +237,13 @@ def _build_chart(econ: dict[str, Any], years: int) -> go.Figure:
 
 def render_economics(basin: str, fuel_type: str, wti: float) -> None:
     """Render the well economics calculator tab."""
-    st.subheader("Well Economics Calculator")
-    st.caption(
-        "Hyperbolic Arps decline curve + DCF model for a single horizontal well. "
-        "Inputs pre-filled with basin-level benchmarks. All calculations update instantly."
-    )
-
     defaults = BASIN_DEFAULTS.get(basin, BASIN_DEFAULTS["Permian"])
 
     col_in, col_out = st.columns([1, 1], gap="large")
 
     # ---- Inputs ----
     with col_in:
-        st.markdown(f"#### Inputs — {basin} defaults")
+        st.markdown(f"#### Inputs · {basin} defaults")
 
         ip_bopd: float = st.number_input(
             "Initial production rate (BOPD)",
@@ -312,7 +300,7 @@ def render_economics(basin: str, fuel_type: str, wti: float) -> None:
 
     # ---- Output metrics ----
     with col_out:
-        st.markdown("#### Return Metrics")
+        st.markdown("#### Returns")
 
         m1, m2 = st.columns(2)
         m1.metric(
@@ -365,7 +353,7 @@ def render_economics(basin: str, fuel_type: str, wti: float) -> None:
             st.info(
                 "Gas wells: inputs use oil-equivalent pricing. "
                 "Actual gas economics require Henry Hub price and BTU conversion.",
-                icon="ℹ️",
+                icon=":material/info:",
             )
 
     st.divider()
