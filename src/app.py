@@ -14,25 +14,34 @@ from pathlib import Path
 import anthropic
 import streamlit as st
 
-from config import check_secrets, get_anthropic_key
-from data.eia import BASIN_SOURCE, BASINS
-from data.loader import load_production
-from kpi.metrics import DEFAULT_HENRY_HUB, DEFAULT_WTI
-from ui.access import require_access
-from ui.chat import render_chat
-from ui.committee import render_committee
-from ui.economics import render_economics
-from ui.forecast import render_forecast
-from ui.map import render_map
-from ui.memo import render_memo
-from ui.observatory import render_observatory
-from ui.overview import render_overview
-from ui.theme import APP_CSS, page_header
+from reload_guard import purge_if_changed
+
+# Must run before any project import below, so a deploy loads the new files
+# instead of modules left in memory by the previous version.
+if purge_if_changed(Path(__file__).resolve().parent):
+    st.cache_data.clear()
+    st.cache_resource.clear()
+
+from config import check_secrets, get_anthropic_key  # noqa: E402
+from data.eia import BASIN_SOURCE, BASINS  # noqa: E402
+from data.loader import load_production  # noqa: E402
+from kpi.metrics import DEFAULT_HENRY_HUB, DEFAULT_WTI  # noqa: E402
+from ui.access import require_access  # noqa: E402
+from ui.chat import render_chat  # noqa: E402
+from ui.committee import render_committee  # noqa: E402
+from ui.economics import render_economics  # noqa: E402
+from ui.forecast import render_forecast  # noqa: E402
+from ui.map import render_map  # noqa: E402
+from ui.memo import render_memo  # noqa: E402
+from ui.observatory import render_observatory  # noqa: E402
+from ui.overview import render_overview  # noqa: E402
+from ui.theme import APP_CSS, page_header  # noqa: E402
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
 
+
 def _basin_label(basin: str) -> str:
-    """Basin name plus the states its figures actually add up."""
+    """Basin name plus where its figures come from."""
     return f"{basin} · {BASIN_SOURCE.get(basin, '?')}"
 
 
