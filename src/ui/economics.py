@@ -1,233 +1,113 @@
-"""Well Economics Calculator tab — Arps decline curve + DCF model.
+"""Well Economics page: decline curve and discounted cash flow for one well.
 
-All calculations run client-side in Python/NumPy and update instantly when any
-input changes (Streamlit re-executes on every widget interaction).
-
-Model
------
-Hyperbolic Arps decline (reduces to exponential when b -> 0):
-    q(t) = qi / (1 + b * Di * t)^(1/b)
-
-where:
-    qi  = initial monthly production (bbl/month)
-    Di  = nominal initial monthly decline rate
-    b   = hyperbolic exponent (0 = exponential, 1 = harmonic, 1.5 typical shale)
-    t   = time in months from first production
-
-Financial model:
-    Revenue(t)    = q(t) * oil_price
-    LOE(t)        = q(t) * loe_per_bbl
-    Net CF(t)     = Revenue(t) - LOE(t)
-    NPV@r         = -CAPEX + sum[ Net CF(t) / (1+r_monthly)^t ]  for t=1..N
-    IRR           = r_annual such that NPV = 0  (bisection method)
-    Payback       = first month where cumulative Net CF >= CAPEX
-    EUR           = sum of q(t) over full forecast period
+The math lives in models.well_economics. This module only draws inputs,
+results and charts. Oil wells are modelled in barrels at an oil price; gas
+wells in Mcf at a gas price taken from the Henry Hub assumption.
 """
 from __future__ import annotations
 
 from typing import Any
 
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
+from kpi.metrics import DEFAULT_HENRY_HUB, MMBTU_PER_MCF
+from models.well_economics import WellInputs, evaluate
 from ui.theme import ACCENT, AMBER, GAS, MUTED, style_figure, with_alpha
 
 # ---------------------------------------------------------------------------
-# Per-basin default inputs (rough industry benchmarks for illustration)
+# Illustrative per-basin defaults. They are round numbers for a typical modern
+# horizontal well, not sourced type curves; edit them to match a real case.
+# ip: initial rate per day; de_pct: effective first-year decline; dc_cost: $MM
 # ---------------------------------------------------------------------------
 
-BASIN_DEFAULTS: dict[str, dict[str, Any]] = {
-    "Permian":     {"ip": 700, "di_pct": 70, "b": 1.3, "dc_cost": 9.5},
-    "Bakken":      {"ip": 550, "di_pct": 65, "b": 1.2, "dc_cost": 10.0},
-    "Eagle Ford":  {"ip": 500, "di_pct": 72, "b": 1.2, "dc_cost": 8.5},
-    "Marcellus":   {"ip": 400, "di_pct": 60, "b": 1.1, "dc_cost": 7.0},
-    "Haynesville": {"ip": 350, "di_pct": 65, "b": 1.0, "dc_cost": 8.0},
-    "Anadarko":    {"ip": 300, "di_pct": 60, "b": 1.1, "dc_cost": 7.5},
-    "Appalachian": {"ip": 350, "di_pct": 55, "b": 1.0, "dc_cost": 6.5},
+OIL_DEFAULTS: dict[str, dict[str, Any]] = {
+    "Permian":     {"ip": 700, "de_pct": 70, "b": 1.3, "dc_cost": 9.5},
+    "Bakken":      {"ip": 550, "de_pct": 65, "b": 1.2, "dc_cost": 10.0},
+    "Eagle Ford":  {"ip": 500, "de_pct": 72, "b": 1.2, "dc_cost": 8.5},
+    "Marcellus":   {"ip": 400, "de_pct": 60, "b": 1.1, "dc_cost": 7.0},
+    "Haynesville": {"ip": 350, "de_pct": 65, "b": 1.0, "dc_cost": 8.0},
+    "Anadarko":    {"ip": 300, "de_pct": 60, "b": 1.1, "dc_cost": 7.5},
+    "Appalachian": {"ip": 350, "de_pct": 55, "b": 1.0, "dc_cost": 6.5},
+}
+
+GAS_DEFAULTS: dict[str, dict[str, Any]] = {
+    "Permian":     {"ip": 2_000,  "de_pct": 70, "b": 1.2, "dc_cost": 9.5},
+    "Bakken":      {"ip": 1_000,  "de_pct": 65, "b": 1.1, "dc_cost": 10.0},
+    "Eagle Ford":  {"ip": 3_000,  "de_pct": 70, "b": 1.1, "dc_cost": 8.5},
+    "Marcellus":   {"ip": 12_000, "de_pct": 60, "b": 1.0, "dc_cost": 9.0},
+    "Haynesville": {"ip": 20_000, "de_pct": 75, "b": 0.9, "dc_cost": 14.0},
+    "Anadarko":    {"ip": 4_000,  "de_pct": 65, "b": 1.0, "dc_cost": 8.0},
+    "Appalachian": {"ip": 10_000, "de_pct": 60, "b": 1.0, "dc_cost": 8.5},
+}
+
+# Basins where wells are drilled mainly for oil, so a gas-only case is a stretch.
+_OIL_WEIGHTED = {"Permian", "Bakken", "Eagle Ford", "Anadarko"}
+
+_UNITS = {
+    "oil": {"day": "bbl/d", "unit": "bbl", "k": "Mbbl", "price": "$/bbl", "var_cost": 12.0, "tax": 4.6},
+    "gas": {"day": "Mcf/d", "unit": "Mcf", "k": "MMcf", "price": "$/Mcf", "var_cost": 0.50, "tax": 5.0},
 }
 
 
-# ---------------------------------------------------------------------------
-# Core calculations
-# ---------------------------------------------------------------------------
-
-def _arps_monthly(
-    ip_bopd: float,
-    di_annual: float,
-    b: float,
-    months: int,
-) -> np.ndarray:
-    """Monthly production (bbl/month) via hyperbolic Arps.
-
-    Parameters
-    ----------
-    ip_bopd   : initial rate (BOPD)
-    di_annual : initial nominal annual decline rate (fraction, e.g. 0.70)
-    b         : hyperbolic exponent; b=0 collapses to exponential
-    months    : number of months to compute
-    """
-    qi = ip_bopd * 30.4375  # avg bbl/month at IP
-    t = np.arange(months, dtype=float)
-
-    if b < 0.01:
-        # Exponential: convert annual rate to monthly
-        di_m = -np.log(1.0 - min(di_annual, 0.999)) / 12.0
-        return qi * np.exp(-di_m * t)
-
-    # Hyperbolic: convert to equivalent monthly nominal decline
-    di_m = (1.0 - (1.0 - min(di_annual, 0.999)) ** (1.0 / 12.0))
-    return qi / (1.0 + b * di_m * t) ** (1.0 / b)
-
-
-def _npv(cash_flows: np.ndarray, capex: float, r_annual: float) -> float:
-    """NPV given monthly net cash flows and up-front CAPEX."""
-    r_m = (1.0 + r_annual) ** (1.0 / 12.0) - 1.0
-    t = np.arange(1, len(cash_flows) + 1, dtype=float)
-    return float(-capex + np.sum(cash_flows / (1.0 + r_m) ** t))
-
-
-def _irr_annual(cash_flows: np.ndarray, capex: float) -> float | None:
-    """Annual IRR via bisection; returns None if no positive root in [0, 10]."""
-    if _npv(cash_flows, capex, 0.0) <= 0:
-        return None  # not even profitable at 0% — no positive IRR
-
-    lo, hi = 0.0, 10.0  # search 0% to 1000% annual
-    for _ in range(120):
-        mid = (lo + hi) / 2.0
-        if _npv(cash_flows, capex, mid) > 0:
-            lo = mid
-        else:
-            hi = mid
-        if hi - lo < 1e-7:
-            break
-
-    result = (lo + hi) / 2.0
-    return result if result < 9.99 else None
-
-
-def _calc_economics(
-    ip_bopd: float,
-    di_annual: float,
-    b: float,
-    dc_cost_mm: float,
-    loe_per_bbl: float,
-    oil_price: float,
-    discount_rate: float,
-    years: int,
-) -> dict[str, Any]:
-    """Full economics model. Returns a dict of arrays and summary metrics."""
-    months = years * 12
-    production = _arps_monthly(ip_bopd, di_annual, b, months)
-
-    revenue = production * oil_price
-    loe = production * loe_per_bbl
-    net_cf = revenue - loe
-    capex = dc_cost_mm * 1_000_000.0
-
-    cumulative_cf = np.cumsum(net_cf) - capex
-
-    # Payback period
-    positive = np.where(cumulative_cf >= 0)[0]
-    payback_months: int | None = int(positive[0]) + 1 if len(positive) > 0 else None
-
-    eur_bbl = float(np.sum(production))
-
-    npv_val = _npv(net_cf, capex, discount_rate)
-    irr_val = _irr_annual(net_cf, capex)
-
-    # Breakeven oil price ($/bbl): price where NPV = 0
-    # Approx: (CAPEX/EUR) + LOE
-    breakeven = (capex / eur_bbl + loe_per_bbl) if eur_bbl > 0 else None
-
-    return {
-        "production": production,         # bbl/month array
-        "net_cf": net_cf,                 # $/month array
-        "cumulative_cf": cumulative_cf,   # $ cumulative (after capex)
-        "eur_mbbls": eur_bbl / 1_000.0,
-        "npv_mm": npv_val / 1_000_000.0,
-        "irr_pct": irr_val * 100 if irr_val is not None else None,
-        "payback_months": payback_months,
-        "breakeven_price": round(breakeven, 1) if breakeven else None,
-        "months": months,
-    }
+def _money(x: float) -> str:
+    sign = "-" if x < 0 else ""
+    return f"{sign}${abs(x) / 1e6:,.2f}MM"
 
 
 # ---------------------------------------------------------------------------
 # Charts
 # ---------------------------------------------------------------------------
 
-def _build_chart(econ: dict[str, Any], years: int) -> go.Figure:
+def _build_chart(econ: dict[str, Any], k_unit: str) -> go.Figure:
     months = econ["months"]
-    month_labels = pd.date_range("2025-01", periods=months, freq="MS")
-    prod_mbbls = econ["production"] / 1_000.0
+    month_index = list(range(1, months + 1))
+    vol_k = econ["volumes"] / 1_000.0
     cum_cf_mm = econ["cumulative_cf"] / 1_000_000.0
 
     fig = make_subplots(
         rows=1, cols=2,
-        subplot_titles=("Production Decline Curve", "Cumulative Net Cash Flow"),
+        subplot_titles=("Monthly production", "Cumulative net cash flow"),
         horizontal_spacing=0.10,
     )
-
-    # --- Production decline curve ---
     fig.add_trace(
         go.Scatter(
-            x=month_labels,
-            y=prod_mbbls,
-            name="Monthly Production",
-            fill="tozeroy",
-            fillcolor=with_alpha(ACCENT, 0.16),
+            x=month_index, y=vol_k, name="Monthly production",
+            fill="tozeroy", fillcolor=with_alpha(ACCENT, 0.16),
             line=dict(color=ACCENT, width=2),
-            hovertemplate="%{y:.2f} Mbbls<extra></extra>",
+            hovertemplate=f"Month %{{x}}: %{{y:.2f}} {k_unit}<extra></extra>",
         ),
         row=1, col=1,
     )
-
-    # --- Cumulative cash flow ---
     fig.add_trace(
         go.Scatter(
-            x=month_labels,
-            y=cum_cf_mm,
-            name="Cumul. Net CF",
+            x=month_index, y=cum_cf_mm, name="Cumulative net cash flow",
             line=dict(color=GAS, width=2),
-            hovertemplate="$%{y:.1f}MM<extra></extra>",
+            hovertemplate="Month %{x}: $%{y:.2f}MM<extra></extra>",
         ),
         row=1, col=2,
     )
+    fig.add_hline(y=0, line_dash="dash", line_color=MUTED, row=1, col=2)
 
-    # Zero line
-    fig.add_hline(
-        y=0,
-        line_dash="dash",
-        line_color=MUTED,
-        row=1, col=2,
-    )
-
-    # Payback star marker
     pb = econ["payback_months"]
     if pb and pb <= months:
-        pb_x = month_labels[pb - 1]
-        pb_y = float(cum_cf_mm[pb - 1])
         fig.add_trace(
             go.Scatter(
-                x=[pb_x],
-                y=[pb_y],
-                mode="markers",
+                x=[pb], y=[float(cum_cf_mm[pb - 1])], mode="markers",
                 name=f"Payback ({pb} mo)",
                 marker=dict(color=AMBER, size=13, symbol="star"),
-                hovertemplate=f"Payback: {pb} months ({pb/12:.1f} yr)<extra></extra>",
+                hovertemplate=f"Payback: month {pb} ({pb / 12:.1f} yr)<extra></extra>",
             ),
             row=1, col=2,
         )
 
     style_figure(fig, height=380, margin=dict(t=60, b=40, l=60, r=20))
     fig.update_layout(legend=dict(y=1.12), showlegend=True)
-    fig.update_yaxes(title_text="Mbbls / month", row=1, col=1)
+    fig.update_yaxes(title_text=f"{k_unit} / month", row=1, col=1)
     fig.update_yaxes(title_text="$MM (cumulative)", row=1, col=2)
-    fig.update_xaxes(showgrid=False)
-
+    fig.update_xaxes(title_text="Months on production", showgrid=False)
     return fig
 
 
@@ -235,142 +115,172 @@ def _build_chart(econ: dict[str, Any], years: int) -> go.Figure:
 # Main render
 # ---------------------------------------------------------------------------
 
-def render_economics(basin: str, fuel_type: str, wti: float) -> None:
-    """Render the well economics calculator tab."""
-    defaults = BASIN_DEFAULTS.get(basin, BASIN_DEFAULTS["Permian"])
+def render_economics(
+    basin: str, fuel_type: str, wti: float, henry_hub: float = DEFAULT_HENRY_HUB
+) -> None:
+    """Render the well economics calculator."""
+    gas = fuel_type == "gas"
+    u = _UNITS["gas" if gas else "oil"]
+    table = GAS_DEFAULTS if gas else OIL_DEFAULTS
+    defaults = table.get(basin, table["Permian"])
+    default_price = round(henry_hub * MMBTU_PER_MCF, 2) if gas else float(wti)
+
+    if gas and basin in _OIL_WEIGHTED:
+        st.info(
+            f"{basin} wells are mostly drilled for oil. This gas case charges the whole well "
+            "cost to gas and leaves out the oil, so it understates the well. Switch Fuel to "
+            "Oil for the main case.",
+            icon=":material/info:",
+        )
 
     col_in, col_out = st.columns([1, 1], gap="large")
 
-    # ---- Inputs ----
     with col_in:
-        st.markdown(f"#### Inputs · {basin} defaults")
-
-        ip_bopd: float = st.number_input(
-            "Initial production rate (BOPD)",
-            min_value=50, max_value=5_000,
-            value=int(defaults["ip"]), step=50,
-            help="Barrels of oil per day at first production",
+        st.markdown(f"#### Inputs · {basin} {fuel_type} defaults")
+        ip = st.number_input(
+            f"Initial rate ({u['day']})",
+            min_value=50, max_value=60_000, value=int(defaults["ip"]), step=50,
+            help="Average daily rate at first production.",
         )
-        di_pct: int = st.slider(
-            "Initial decline rate (% / year)",
-            min_value=10, max_value=95,
-            value=int(defaults["di_pct"]), step=5,
-            help="Nominal initial annual decline rate",
+        de_pct = st.slider(
+            "First-year decline (%)",
+            min_value=10, max_value=95, value=int(defaults["de_pct"]), step=1,
+            help="Effective decline: the share of the initial rate lost over the first year. "
+            "A 70% decline means the rate after 12 months is 30% of the initial rate.",
         )
-        b_factor: float = st.slider(
+        b_factor = st.slider(
             "Hyperbolic exponent (b)",
-            min_value=0.0, max_value=2.0,
-            value=float(defaults["b"]), step=0.05,
-            help="b=0 = exponential, b=1 = harmonic, b=1.2-1.5 typical shale",
+            min_value=0.0, max_value=2.0, value=float(defaults["b"]), step=0.05,
+            help="0 is exponential, 1 is harmonic; 0.9 to 1.5 is common for shale wells.",
         )
-        dc_cost: float = st.number_input(
-            "D&C cost ($MM)",
-            min_value=1.0, max_value=40.0,
-            value=float(defaults["dc_cost"]), step=0.5,
-            help="Drilling and completion capital expenditure",
+        d_min_pct = st.slider(
+            "Terminal decline (% per year)",
+            min_value=2, max_value=20, value=8, step=1,
+            help="Once the decline slows to this rate, the curve turns exponential. Without it, "
+            "a b above 1 keeps producing without limit.",
         )
-        loe: float = st.number_input(
-            "Lease operating expense ($/bbl)",
-            min_value=0.0, max_value=60.0,
-            value=12.0, step=1.0,
-            help="Variable operating cost per barrel produced",
+        dc_cost = st.number_input(
+            "Drilling and completion cost ($MM)",
+            min_value=1.0, max_value=40.0, value=float(defaults["dc_cost"]), step=0.5,
         )
-        oil_px: float = st.number_input(
-            "Oil price assumption ($/bbl)",
-            min_value=20.0, max_value=250.0,
-            value=float(wti), step=5.0,
-            help="Flat price deck for entire forecast horizon",
+        price = st.number_input(
+            f"Realised price ({u['price']})",
+            min_value=0.5 if gas else 20.0, max_value=30.0 if gas else 250.0,
+            value=default_price, step=0.1 if gas else 1.0,
+            help=(
+                f"Defaults to Henry Hub ${henry_hub:.2f}/MMBtu × {MMBTU_PER_MCF} MMBtu/Mcf. "
+                "Local prices can sit well below Henry Hub."
+                if gas else "Defaults to the WTI assumption. Wellhead prices usually sit a few "
+                "dollars below WTI."
+            ),
         )
-
+        c_roy, c_tax = st.columns(2)
+        royalty_pct = c_roy.number_input(
+            "Royalty (%)", min_value=0.0, max_value=40.0, value=20.0, step=0.5,
+            help="Share of gross revenue paid to mineral owners.",
+        )
+        tax_pct = c_tax.number_input(
+            "Production taxes (%)", min_value=0.0, max_value=15.0, value=u["tax"], step=0.1,
+            help="Severance and ad valorem taxes on revenue after royalty.",
+        )
+        c_var, c_fix = st.columns(2)
+        var_cost = c_var.number_input(
+            f"Operating cost ({u['price']})", min_value=0.0, max_value=60.0,
+            value=u["var_cost"], step=0.05 if gas else 1.0,
+            help="Variable lease operating, gathering and transport cost per unit.",
+        )
+        fixed_k = c_fix.number_input(
+            "Fixed cost ($K/month)", min_value=0.0, max_value=50.0, value=3.0, step=0.5,
+            help="Fixed operating cost per producing month. The well is shut in once monthly "
+            "cash flow turns negative.",
+        )
         col_y, col_r = st.columns(2)
-        years: int = col_y.slider("Forecast years", 5, 30, 20)
-        disc_pct: int = col_r.slider("Discount rate (%)", 5, 30, 10)
+        years = col_y.slider("Forecast years", 5, 40, 20)
+        disc_pct = col_r.slider("Discount rate (%)", 5, 30, 10)
 
-    # ---- Calculations ----
-    econ = _calc_economics(
-        ip_bopd=float(ip_bopd),
-        di_annual=di_pct / 100.0,
+    econ = evaluate(WellInputs(
+        ip_per_day=float(ip),
+        de_first_year=de_pct / 100.0,
         b=float(b_factor),
-        dc_cost_mm=float(dc_cost),
-        loe_per_bbl=float(loe),
-        oil_price=float(oil_px),
+        d_min=d_min_pct / 100.0,
+        capex=float(dc_cost) * 1e6,
+        price=float(price),
+        royalty=royalty_pct / 100.0,
+        production_tax=tax_pct / 100.0,
+        variable_cost=float(var_cost),
+        fixed_cost_month=float(fixed_k) * 1_000.0,
         discount_rate=disc_pct / 100.0,
-        years=years,
-    )
+        years=int(years),
+    ))
 
-    # ---- Output metrics ----
     with col_out:
         st.markdown("#### Returns")
-
+        st.caption(
+            "Inputs are illustrative round numbers, not a sourced type curve. "
+            "Use them to compare cases, not as a valuation."
+        )
         m1, m2 = st.columns(2)
         m1.metric(
-            "EUR",
-            f"{econ['eur_mbbls']:,.1f} Mbbls",
-            help="Estimated Ultimate Recovery over the forecast period",
+            f"EUR ({years} yr)", f"{econ['eur'] / 1_000:,.1f} {u['k']}",
+            help="Volume produced over the forecast period, up to the economic limit.",
         )
-        npv_sign = "+" if econ["npv_mm"] >= 0 else ""
         m2.metric(
-            f"NPV @ {disc_pct}%",
-            f"${npv_sign}{econ['npv_mm']:,.1f}MM",
-            delta="positive" if econ["npv_mm"] >= 0 else "negative",
-            delta_color="normal",
+            f"NPV @ {disc_pct}%", _money(econ["npv"]),
+            help="After royalty, production taxes and operating costs; before income tax.",
         )
 
         m3, m4 = st.columns(2)
+        irr_val = econ["irr"]
         irr_str = (
-            f"{econ['irr_pct']:.1f}%"
-            if econ["irr_pct"] is not None
-            else "< 0%"
+            "No positive IRR" if irr_val is None
+            else "Above 1,000%" if econ["irr_capped"]
+            else f"{irr_val * 100:.1f}%"
         )
-        m3.metric("IRR", irr_str, help="Internal Rate of Return (annualised)")
-
+        m3.metric("IRR", irr_str, help="Annual internal rate of return.")
         pb = econ["payback_months"]
-        pb_str = (
-            f"{pb} mo  ({pb / 12:.1f} yr)"
-            if pb
-            else "No payback"
-        )
-        m4.metric("Payback", pb_str)
+        m4.metric("Payback", f"{pb} mo ({pb / 12:.1f} yr)" if pb else "No payback")
 
         st.markdown("---")
-        st.markdown("**Breakeven & efficiency**")
-        be = econ["breakeven_price"]
-        eur_per_mm = econ["eur_mbbls"] / dc_cost if dc_cost > 0 else 0
-
-        col_be, col_eff = st.columns(2)
-        col_be.metric(
-            "Breakeven price",
-            f"${be:.0f}/bbl" if be else "N/A",
-            help="Oil price where undiscounted revenue = LOE + D&C",
+        b1, b2 = st.columns(2)
+        be_npv = econ["breakeven_npv"]
+        be_raw = econ["breakeven_undiscounted"]
+        fmt = (lambda p: f"${p:,.2f}/Mcf") if gas else (lambda p: f"${p:,.1f}/bbl")
+        b1.metric(
+            f"Breakeven @ {disc_pct}%", fmt(be_npv) if be_npv is not None else "N/A",
+            help=f"Price at which NPV at {disc_pct}% is zero, with the same costs and taxes.",
         )
-        col_eff.metric(
-            "EUR / D&C $",
-            f"{eur_per_mm:.0f} Mbbls/$MM",
-            help="Capital efficiency measure",
+        b2.metric(
+            "Breakeven, undiscounted", fmt(be_raw) if be_raw is not None else "N/A",
+            help="Price at which total cash flow just repays the well cost, ignoring timing.",
         )
-
-        if fuel_type == "gas":
-            st.info(
-                "Gas wells: inputs use oil-equivalent pricing. "
-                "Actual gas economics require Henry Hub price and BTU conversion.",
-                icon=":material/info:",
-            )
+        l1, l2 = st.columns(2)
+        life = econ["life_months"]
+        l1.metric(
+            "Producing life",
+            f"{life / 12:.1f} yr" + (" (to horizon)" if life >= econ["months"] else ""),
+            help="Months until cash flow turns negative, capped at the forecast period.",
+        )
+        l2.metric(
+            f"{u['k']} per $MM", f"{econ['eur'] / 1_000 / dc_cost:,.1f}",
+            help="Capital efficiency: EUR per million dollars of well cost.",
+        )
+        st.caption(
+            f"Not modelled: {'condensate and NGL' if gas else 'gas and NGL'} revenue, price "
+            "differentials, workovers, abandonment cost and income tax."
+        )
 
     st.divider()
+    st.plotly_chart(_build_chart(econ, u["k"]), use_container_width=True)
 
-    # ---- Charts ----
-    fig = _build_chart(econ, years)
-    st.plotly_chart(fig, use_container_width=True)
-
-    # ---- Monthly detail table ----
-    with st.expander("Monthly production & cash flow — first 36 months"):
-        month_labels = pd.date_range("2025-01", periods=min(36, econ["months"]), freq="MS")
-        df_tbl = pd.DataFrame({
-            "Period":           [d.strftime("%Y-%m") for d in month_labels],
-            "Production (bbl)": [f"{v:,.0f}" for v in econ["production"][:36]],
-            "Revenue ($K)":     [f"{v/1_000:,.1f}" for v in econ["production"][:36] * oil_px],
-            "LOE ($K)":         [f"{v/1_000:,.1f}" for v in econ["production"][:36] * loe],
-            "Net CF ($K)":      [f"{v/1_000:,.1f}" for v in econ["net_cf"][:36]],
-            "Cumul. CF ($K)":   [f"{v/1_000:,.1f}" for v in econ["cumulative_cf"][:36]],
-        })
-        st.dataframe(df_tbl, use_container_width=True, hide_index=True)
+    with st.expander("Monthly production and cash flow, first 36 months"):
+        n = min(36, econ["months"])
+        st.dataframe(
+            pd.DataFrame({
+                "Month": range(1, n + 1),
+                f"Production ({u['unit']})": [f"{v:,.0f}" for v in econ["volumes"][:n]],
+                "Gross revenue ($K)": [f"{v / 1_000:,.1f}" for v in econ["gross_revenue"][:n]],
+                "Net cash flow ($K)": [f"{v / 1_000:,.1f}" for v in econ["net_cf"][:n]],
+                "Cumulative ($K)": [f"{v / 1_000:,.1f}" for v in econ["cumulative_cf"][:n]],
+            }),
+            use_container_width=True, hide_index=True,
+        )

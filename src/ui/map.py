@@ -19,6 +19,7 @@ from ui.theme import AXIS, FLARE, GRID, MUTED, TRANSPARENT, style_figure
 
 from agents.tools import execute_tool
 from data.eia import BASINS
+from kpi.metrics import DEFAULT_HENRY_HUB, price_assumption_text
 
 # ---------------------------------------------------------------------------
 # Geographic constants
@@ -65,15 +66,23 @@ _OVERLAY_LABELS: dict[str, str] = {
 }
 
 
+def _md_price(fuel_type: str, wti: float, henry_hub: float) -> str:
+    """Price text with dollar signs escaped, so Streamlit markdown does not read them as math."""
+    return price_assumption_text(fuel_type, wti, henry_hub).replace("$", "\\$")
+
+
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _load_comparison(fuel_type: str, target_year: int, wti: float) -> dict[str, Any]:
+def _load_comparison(
+    fuel_type: str, target_year: int, wti: float, henry_hub: float = DEFAULT_HENRY_HUB
+) -> dict[str, Any]:
     return execute_tool(
         "compare_basins",
-        {"fuel_type": fuel_type, "target_year": target_year, "wti_assumption": wti},
+        {"fuel_type": fuel_type, "target_year": target_year, "wti_assumption": wti,
+         "henry_hub_assumption": henry_hub},
     )
 
 
@@ -277,6 +286,7 @@ def _render_kpi_panel(
     fuel_type: str,
     target_year: int,
     wti: float,
+    henry_hub: float = DEFAULT_HENRY_HUB,
 ) -> None:
     """Render KPI metric cards for the selected basin."""
     st.subheader(f"{basin} · {fuel_type.title()} · {target_year}", anchor=False)
@@ -314,7 +324,7 @@ def _render_kpi_panel(
     c4.metric(
         "Revenue Potential",
         f"${rev * 12:,.0f}M / yr" if rev else "N/A",
-        help=f"Annualised gross potential at WTI ${wti}/bbl",
+        help=f"Annualised gross value at {_md_price(fuel_type, wti, henry_hub)}, before royalties, taxes and costs",
     )
 
 
@@ -327,6 +337,7 @@ def render_map(
     fuel_type: str,
     target_year: int,
     wti: float,
+    henry_hub: float = DEFAULT_HENRY_HUB,
 ) -> None:
     """Render the geographic basin map tab."""
     col_overlay, col_tip = st.columns([1, 3])
@@ -346,7 +357,7 @@ def render_map(
 
     with st.spinner("Loading basin data..."):
         try:
-            cmp = _load_comparison(fuel_type, target_year, wti)
+            cmp = _load_comparison(fuel_type, target_year, wti, henry_hub)
         except Exception as exc:
             st.error(f"Failed to load map data: {exc}")
             return
@@ -394,4 +405,4 @@ def render_map(
             st.rerun()
 
     st.divider()
-    _render_kpi_panel(basin, ranked, fuel_type, target_year, wti)
+    _render_kpi_panel(basin, ranked, fuel_type, target_year, wti, henry_hub)

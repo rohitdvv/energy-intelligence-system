@@ -65,11 +65,13 @@ The 12-month rolling mean is subtracted first to isolate cyclical noise from sec
 
 ## 5. Revenue Potential
 
-**What:** Estimated gross monthly revenue in $M at the user's WTI assumption.
+**What:** Estimated gross monthly revenue in $M at the user's price assumption (WTI for oil, Henry Hub for gas).
 
 **Formulas:**
 - Oil: `Mbbls × 1,000 bbl/Mbbl × WTI_$/bbl ÷ 1,000,000`
-- Gas: `MMcf × 1,000 Mcf/MMcf × (WTI/6)_$/Mcf ÷ 1,000,000` (BTU parity proxy)
+- Gas: `MMcf × 1,000 Mcf/MMcf × HenryHub_$/MMBtu × 1.036 MMBtu/Mcf ÷ 1,000,000`
+
+Gas used to be priced at WTI / 6, which is energy parity rather than a market price. At $75 WTI that is $12.50/Mcf, three to four times typical Henry Hub prices.
 
 UI displays annualised: `$M/mo × 12 = $M/yr`
 
@@ -87,24 +89,36 @@ UI displays annualised: `$M/mo × 12 = $M/yr`
 
 Highest-producing basin = 100, lowest = 0. Relative ranking only — not an absolute quality score.
 
+It re-expresses size only: the largest basin is always 100, and Permian must outscore Eagle Ford because Permian's figure contains all of Texas.
+
 **Answers:** "Where does this basin rank in the peer set this year?"
 
 ---
 
-## 7. Well Economics KPIs (Economics Tab)
+## 7. Well Economics KPIs (Economics page)
 
-Computed by `src/ui/economics.py` using Arps hyperbolic decline:
+Computed by `src/models/well_economics.py`; the page is `src/ui/economics.py`.
+Oil wells are modelled in barrels at the WTI assumption, gas wells in Mcf at Henry Hub × 1.036.
+
+**Decline.** The input is the effective first-year decline `De` (70% means the rate after a year is 30% of the initial rate). It converts to the nominal rate the hyperbolic curve needs:
+
+- `b > 0`: `Di = ((1 − De)^(−b) − 1) / b`
+- `b = 0`: `Di = −ln(1 − De)`
+
+`q(t) = qi / (1 + b·Di·t)^(1/b)` until the instantaneous decline `Di / (1 + b·Di·t)` falls to the terminal rate `Dlim = −ln(1 − Dmin)` (default `Dmin` = 8%/yr), then exponential at `Dlim`. Monthly volumes are integrals of the rate over each month, from the closed-form cumulative curve.
+
+**Cash flow.** `NCF = volume × (price × (1 − royalty) × (1 − production tax) − variable cost) − fixed cost`. The well is shut in from the first month NCF is negative. CAPEX at month 0; end-of-month discounting at `(1 + r)^(1/12) − 1`.
 
 | KPI | Formula | What it answers |
 |-----|---------|-----------------|
-| EUR | `sum of monthly production over well life` | Total reserves recoverable |
-| NPV | `-capex + sum(net_cf / (1+r_monthly)^t)` | Is this well worth drilling at this discount rate? |
-| IRR | Bisection on NPV=0 over [0,10] annual rate | What return does this well generate? |
-| Payback | Month when cumulative net CF turns positive | How long until capital is returned? |
-| Breakeven price | WTI at which NPV = 0 | Below what price does this well lose money? |
+| EUR | Sum of monthly volumes over the forecast period, up to the economic limit | Volume the well produces |
+| NPV | `−capex + Σ NCF_t / (1 + r_m)^t` | Is this well worth drilling at this discount rate? |
+| IRR | Bisection for NPV = 0 on [0, 10] annual | What return does this well generate? |
+| Payback | First month cumulative NCF ≥ capex | How long until capital is returned? |
+| Breakeven @ r | Price at which NPV at the discount rate is zero (bisection, full model) | Below what price does the well destroy value? |
+| Breakeven, undiscounted | Same at r = 0 | Below what price does the well never repay its cost? |
 
-**Arps hyperbolic decline:** `q(t) = q_i / (1 + b × D_i × t)^(1/b)`
-Falls back to exponential when b < 0.01.
+Not modelled: secondary-product revenue (gas and NGL for oil wells, condensate for gas wells), price differentials, workovers, abandonment cost, working interest below 100%, and income tax. Basin defaults are illustrative round numbers, not sourced type curves.
 
 ---
 
@@ -114,6 +128,16 @@ Falls back to exponential when b < 0.01.
 |-----|--------|----------|------|
 | Production | EIA Open Data API v2 | `petroleum/crd/crpdn/data` (oil), `natural-gas/prod/sum/data` (gas) | Mbbls/mo, MMcf/mo |
 | WTI price | EIA spot / FRED WTISPLC | `petroleum/pri/spt/data` | $/bbl |
+| Henry Hub price | User assumption (default $3.50) | N/A | $/MMBtu |
 | Well inputs | User-entered / basin defaults | N/A | Various |
 
-**Texas proxy limitation:** EIA duoarea `STX` covers all Texas production. Permian and Eagle Ford both map to Texas-level aggregates — not true basin-specific volumes. This is documented in `src/data/eia.py`.
+**Texas proxy limitation:** EIA duoarea `STX` covers all Texas production. Permian and Eagle Ford both map to Texas-level aggregates — not true basin-specific volumes. The app now labels every basin with the states behind it (`BASIN_STATES` in `src/data/eia.py`). On 2025 oil, the six basin rows sum to about 60% more than the distinct states behind them.
+
+---
+
+## Forecast reliability and bands
+
+Computed by `src/models/calibration.py`. The model is refit at each of the last eight year-ends using only data up to that point, and its misses over the next three years are recorded as `|actual − forecast| / forecast`.
+
+- **80% band** at horizon year k: the split-conformal quantile of those misses, the `⌈0.8(n+1)⌉`-th smallest of n. Band = forecast × (1 ± q_k). Monthly bands pool monthly misses by horizon year; annual bands use annual-total misses. Past three years, `q_k = q_3 × √(k/3)` (an assumption). Prophet's own interval is no longer shown: it covered about half of actual months against a nominal 80%.
+- **Baselines** scored on the same windows: seasonal naive (the last 12 months repeated) for monthly figures, flat (the last full year repeated) for annual totals. The Forecast page and the agents' `forecast_basin` tool say whether the model has beaten the flat baseline at that horizon.

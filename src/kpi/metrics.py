@@ -23,6 +23,13 @@ from models.forecaster import ForecastResult
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_WTI = 75.0
+"""Default oil price, $/bbl."""
+DEFAULT_HENRY_HUB = 3.50
+"""Default gas price at Henry Hub, $/MMBtu."""
+MMBTU_PER_MCF = 1.036
+"""Average heat content of U.S. natural gas, about 1,036 Btu per cubic foot (EIA)."""
+
 
 # ------------------------------------------------------------------
 # Tier 1 — Required
@@ -171,28 +178,40 @@ def volatility_score(df: pd.DataFrame) -> dict[str, Any]:
     return {"cv_pct": round(cv, 2) if cv is not None else None, "interpretation": interpretation}
 
 
+def price_assumption_text(
+    fuel_type: str, wti: float = DEFAULT_WTI, henry_hub: float = DEFAULT_HENRY_HUB
+) -> str:
+    """The commodity price a revenue figure uses, written for people and prompts."""
+    if fuel_type == "gas":
+        return f"Henry Hub ${henry_hub:,.2f}/MMBtu"
+    return f"WTI ${wti:,.2f}/bbl"
+
+
 def revenue_potential(
     production_mbbls: float,
     wti_price_per_bbl: float,
     fuel_type: str = "oil",
+    henry_hub_per_mmbtu: float = DEFAULT_HENRY_HUB,
 ) -> dict[str, Any]:
-    """Estimated gross revenue from a production volume + price assumption.
+    """Estimated gross revenue from a production volume and a price assumption.
 
-    For oil: production (Mbbls/month) × 1_000 bbl/Mbbl × price ($/bbl).
-    For gas: production (MMcf/month) × price_per_mcf (default WTI/6 BTU parity).
+    Oil: production (Mbbls/month) x 1,000 bbl/Mbbl x WTI ($/bbl).
+    Gas: production (MMcf/month) x 1,000 Mcf/MMcf x Henry Hub ($/MMBtu) x
+    MMBTU_PER_MCF. Gas used to be priced at WTI / 6, which is energy parity
+    rather than a market price and overstated gas revenue about 3 to 4 times.
+
+    Gross means before royalties, taxes and costs, for the whole state-level
+    area, so it is a size measure and not investable revenue.
 
     Returns value in USD millions.
     """
     if fuel_type == "oil":
-        revenue_usd = production_mbbls * 1_000 * wti_price_per_bbl
         price_used = wti_price_per_bbl
-        price_unit = "$/bbl"
+        price_unit = "$/bbl (WTI)"
     else:
-        # Rough Henry Hub parity: 1 Mcf ≈ WTI_price / 6
-        price_per_mcf = wti_price_per_bbl / 6
-        revenue_usd = production_mbbls * 1_000 * price_per_mcf  # MMcf → Mcf
-        price_used = price_per_mcf
-        price_unit = "$/Mcf (estimated)"
+        price_used = henry_hub_per_mmbtu * MMBTU_PER_MCF
+        price_unit = "$/Mcf (Henry Hub x 1.036 MMBtu/Mcf)"
+    revenue_usd = production_mbbls * 1_000 * price_used
 
     return {
         "revenue_usd_millions": round(revenue_usd / 1_000_000, 2),
@@ -200,6 +219,7 @@ def revenue_potential(
         "price_used": round(price_used, 2),
         "price_unit": price_unit,
         "fuel_type": fuel_type,
+        "basis": "gross, before royalties, taxes and costs",
     }
 
 
@@ -233,7 +253,8 @@ def relative_performance_index(
 def basin_kpi_summary(
     result: ForecastResult,
     target_year: int,
-    wti_price: float = 75.0,
+    wti_price: float = DEFAULT_WTI,
+    henry_hub: float = DEFAULT_HENRY_HUB,
 ) -> dict[str, Any]:
     """Compute all KPIs for a single basin ForecastResult.
 
@@ -258,7 +279,7 @@ def basin_kpi_summary(
 
     rev: dict[str, Any] = {}
     if ppe["value"] is not None:
-        rev = revenue_potential(ppe["value"] / 12, wti_price, result.fuel_type)
+        rev = revenue_potential(ppe["value"] / 12, wti_price, result.fuel_type, henry_hub)
 
     return {
         "basin": result.basin,

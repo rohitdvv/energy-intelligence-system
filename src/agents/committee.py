@@ -26,6 +26,8 @@ import anthropic
 
 from agents.prompts import BEAR_SYSTEM_PROMPT, BULL_SYSTEM_PROMPT, PM_SYSTEM_PROMPT
 from agents.tools import TOOL_SPECS, execute_tool
+from data.eia import basin_scope
+from kpi.metrics import DEFAULT_HENRY_HUB, price_assumption_text
 from observability import record_llm, span
 
 logger = logging.getLogger(__name__)
@@ -231,6 +233,7 @@ class Committee:
         fuel_type: str,
         target_year: int,
         wti_assumption: float = 75.0,
+        henry_hub_assumption: float = DEFAULT_HENRY_HUB,
     ) -> dict[str, Any]:
         """Run the full Bull → Bear → PM investment committee debate.
 
@@ -243,7 +246,9 @@ class Committee:
         target_year:
             The investment horizon year the agents should evaluate.
         wti_assumption:
-            WTI price assumption in $/bbl passed to revenue KPIs.
+            WTI price assumption in $/bbl passed to oil revenue KPIs.
+        henry_hub_assumption:
+            Henry Hub price assumption in $/MMBtu passed to gas revenue KPIs.
 
         Returns
         -------
@@ -251,10 +256,15 @@ class Committee:
         Each of bull/bear/pm is the dict returned by run_agent.
         """
         t0 = time.time()
+        price = price_assumption_text(fuel_type, wti_assumption, henry_hub_assumption)
 
         context = (
             f"Basin: **{basin}**  |  Fuel: {fuel_type}  |  "
-            f"Target year: {target_year}  |  WTI assumption: ${wti_assumption}/bbl\n\n"
+            f"Target year: {target_year}  |  Price assumption: {price} "
+            f"(pass wti_assumption={wti_assumption} and "
+            f"henry_hub_assumption={henry_hub_assumption} to KPI tools)\n\n"
+            f"Basin figures are state totals ({basin_scope(basin)}), not basin-only volumes; "
+            "say so when you cite them.\n\n"
             "Use your available tools to pull live data before writing your thesis. "
             "Do not speculate on numbers you have not retrieved from a tool."
         )
@@ -276,7 +286,7 @@ class Committee:
 
         pm_context = (
             f"Investment committee debate — **{basin}** {fuel_type} "
-            f"(target year: {target_year}, WTI: ${wti_assumption}/bbl).\n\n"
+            f"(target year: {target_year}, price assumption: {price}).\n\n"
             f"{'═' * 50}\n"
             f"BULL ANALYST — Riley Chen\n"
             f"{'═' * 50}\n"
@@ -305,6 +315,8 @@ class Committee:
                 "fuel_type": fuel_type,
                 "target_year": target_year,
                 "wti_assumption": wti_assumption,
+                "henry_hub_assumption": henry_hub_assumption,
+                "price_assumption": price,
                 "total_tool_calls": total_tool_calls,
                 "latency_seconds": elapsed,
                 "model": self.model,

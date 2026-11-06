@@ -8,6 +8,7 @@ from typing import Any
 import streamlit as st
 
 from agents.committee import Committee
+from kpi.metrics import DEFAULT_HENRY_HUB, DEFAULT_WTI, price_assumption_text
 
 
 def _clean(text: str | None) -> str:
@@ -45,7 +46,7 @@ _TEMPLATE = """\
 | Basin | **{basin}** |
 | Fuel type | {fuel_type_upper} |
 | Target year | {target_year} |
-| WTI assumption | ${wti}/bbl |
+| Price assumption | {price} |
 | Verdict | **{verdict}** |
 | Conviction | {conviction} |
 | Generated | {date} |
@@ -104,6 +105,17 @@ capital allocation.*
 """
 
 
+def _price_text(meta: dict[str, Any]) -> str:
+    """Price assumption a run used; runs saved before gas pricing only carry WTI."""
+    if meta.get("price_assumption"):
+        return meta["price_assumption"]
+    return price_assumption_text(
+        meta.get("fuel_type", "oil"),
+        meta.get("wti_assumption", DEFAULT_WTI),
+        meta.get("henry_hub_assumption", DEFAULT_HENRY_HUB),
+    )
+
+
 def _generate_memo(debate_result: dict) -> str:
     meta    = debate_result["metadata"]
     pm_text = debate_result["pm"]["text_response"]
@@ -113,7 +125,7 @@ def _generate_memo(debate_result: dict) -> str:
         basin=meta["basin"],
         fuel_type_upper=meta["fuel_type"].upper(),
         target_year=meta["target_year"],
-        wti=meta["wti_assumption"],
+        price=_price_text(meta),
         date=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         verdict=_clean(verdict.get("verdict")) or "N/A",
         conviction=_clean(verdict.get("conviction")) or "N/A",
@@ -139,7 +151,7 @@ def _generate_pdf_bytes(debate_result: dict[str, Any]) -> bytes:
     basin       = meta["basin"]
     fuel        = meta["fuel_type"].upper()
     target_year = meta["target_year"]
-    wti         = meta["wti_assumption"]
+    price       = _price_text(meta)
     date_str    = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     verdict_val     = _clean(verdict_raw.get("verdict")) or "N/A"
@@ -179,7 +191,7 @@ def _generate_pdf_bytes(debate_result: dict[str, Any]) -> bytes:
         ("Basin", basin),
         ("Fuel type", fuel),
         ("Target year", str(target_year)),
-        ("WTI assumption", f"${wti}/bbl"),
+        ("Price assumption", price),
         ("Generated", date_str),
     ]
     for label, value in rows:

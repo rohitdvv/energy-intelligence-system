@@ -9,6 +9,8 @@ import streamlit as st
 from agents.committee import Committee
 from agents.prompts import BEAR_SYSTEM_PROMPT, BULL_SYSTEM_PROMPT, PM_SYSTEM_PROMPT
 from agents.tools import TOOL_SPECS
+from data.eia import basin_scope
+from kpi.metrics import DEFAULT_HENRY_HUB, price_assumption_text
 from ui.access import has_access
 from ui.usage_limits import daily_public_run_limit, remaining_public_runs, try_start_public_run
 
@@ -25,14 +27,14 @@ def _build_pm_context(
     basin: str,
     fuel_type: str,
     target_year: int,
-    wti: float,
+    price: str,
     bull: dict[str, Any],
     bear: dict[str, Any],
 ) -> str:
     sep = "─" * 44
     return (
         f"Investment committee debate — **{basin}** {fuel_type} "
-        f"(target: {target_year}, WTI: ${wti}/bbl).\n\n"
+        f"(target: {target_year}, price assumption: {price}).\n\n"
         f"BULL ANALYST — Riley Chen\n{sep}\n{bull['text_response']}\n\n"
         f"BEAR ANALYST — Marcus Webb\n{sep}\n{bear['text_response']}\n\n"
         "Issue your binding investment committee verdict."
@@ -46,12 +48,17 @@ def _run_debate(
     wti: float,
     client: Any,
     key: str,
+    henry_hub: float = DEFAULT_HENRY_HUB,
 ) -> None:
     """Execute Bull → Bear → PM sequence with live status updates."""
     committee = Committee(client)
+    price = price_assumption_text(fuel_type, wti, henry_hub)
     context = (
         f"Basin: **{basin}** | Fuel: {fuel_type} | "
-        f"Target year: {target_year} | WTI assumption: ${wti}/bbl\n\n"
+        f"Target year: {target_year} | Price assumption: {price} "
+        f"(pass wti_assumption={wti} and henry_hub_assumption={henry_hub} to KPI tools)\n\n"
+        f"Basin figures are state totals ({basin_scope(basin)}), not basin-only volumes; "
+        "say so when you cite them.\n\n"
         "Use tools to pull live data before writing your thesis. "
         "Do not cite numbers you have not retrieved from a tool call."
     )
@@ -74,7 +81,7 @@ def _run_debate(
             )
             pm = committee.run_agent(
                 PM_SYSTEM_PROMPT,
-                _build_pm_context(basin, fuel_type, target_year, wti, bull, bear),
+                _build_pm_context(basin, fuel_type, target_year, price, bull, bear),
                 [],
                 agent="pm",
             )
@@ -95,6 +102,8 @@ def _run_debate(
                 "fuel_type": fuel_type,
                 "target_year": target_year,
                 "wti_assumption": wti,
+                "henry_hub_assumption": henry_hub,
+                "price_assumption": price,
                 "total_tool_calls": total,
                 "latency_seconds": elapsed,
             },
@@ -170,6 +179,7 @@ def render_committee(
     target_year: int,
     wti: float,
     client: Any,
+    henry_hub: float = DEFAULT_HENRY_HUB,
 ) -> None:
     """Render the Committee tab."""
     key = _debate_key(basin, fuel_type, target_year)
@@ -210,7 +220,7 @@ def render_committee(
 
     if run:
         if owner or try_start_public_run():
-            _run_debate(basin, fuel_type, target_year, wti, client, key)
+            _run_debate(basin, fuel_type, target_year, wti, client, key, henry_hub)
         else:
             st.warning(
                 "Today's public run limit has been reached. It resets at midnight UTC.",

@@ -16,10 +16,16 @@ import numpy as np
 import pandas as pd
 
 from data.bsee_loader import get_offshore_context
-from data.eia import BASINS
+from data.eia import BASINS, basin_scope
 from data.loader import load_production_no_cache
 from data.usgs_loader import get_resource_assessment, resource_adequacy_years
-from kpi.metrics import basin_kpi_summary, relative_performance_index
+from kpi.metrics import (
+    DEFAULT_HENRY_HUB,
+    DEFAULT_WTI,
+    basin_kpi_summary,
+    relative_performance_index,
+)
+from models.calibration import annual_band, baseline_verdict, run_backtest
 from models.forecaster import forecast_basin as _fit_and_forecast
 from observability import span
 
@@ -49,6 +55,24 @@ _BASIN_ENUM = BASINS  # ["Permian", "Bakken", ..., "Appalachian"]
 # ------------------------------------------------------------------
 # Internal helpers
 # ------------------------------------------------------------------
+
+_BACKTESTS: dict[tuple, dict[str, Any]] = {}
+
+
+def _backtest_for(basin: str, fuel_type: str, bdf: pd.DataFrame) -> dict[str, Any]:
+    """Rolling backtest of one series, reused until the data changes."""
+    key = (basin, fuel_type, len(bdf), str(bdf["ds"].max()), float(bdf["y"].iloc[-1]))
+    if key not in _BACKTESTS:
+        try:
+            bt = run_backtest(bdf)
+        except Exception as exc:  # a failed backtest must not break the forecast itself
+            logger.warning("backtest failed for %s %s: %r", basin, fuel_type, exc)
+            bt = {"error": str(exc)}
+        bt.pop("monthly", None)
+        bt.pop("annual", None)
+        _BACKTESTS[key] = bt
+    return _BACKTESTS[key]
+
 
 def _load_basin(fuel_type: str, basin: str) -> pd.DataFrame:
     """Return ds/y DataFrame for *basin*, empty if unavailable."""
@@ -132,8 +156,14 @@ def _exec_forecast_basin(inp: dict[str, Any]) -> dict[str, Any]:
 
     h_rows = result.df[result.df["ds"].dt.year == horizon_year]
     annual_total = round(float(h_rows["y_forecast"].sum()), 2) if not h_rows.empty else None
-    lower = round(float(h_rows["y_lower"].sum()), 2) if not h_rows.empty else None
-    upper = round(float(h_rows["y_upper"].sum()), 2) if not h_rows.empty else None
+
+    # Summing monthly interval bounds does not give an annual interval, and
+    # Prophet's interval has been far too narrow, so the band and the baseline
+    # check come from a rolling backtest of this series instead.
+    backtest = _backtest_for(basin, fuel_type, bdf)
+    k = max(1, horizon_year - cutoff_year)
+    band = annual_band(annual_total, k, backtest) if annual_total and "error" not in backtest else None
+    verdict = baseline_verdict(backtest, k) if "error" not in backtest else None
 
     # Historical CAGR from full available history
     by_year = _annual_sum(
@@ -153,8 +183,11 @@ def _exec_forecast_basin(inp: dict[str, Any]) -> dict[str, Any]:
         "horizon_year": horizon_year,
         "projected_annual_total": annual_total,
         "unit": "Mbbls/yr" if fuel_type == "oil" else "MMcf/yr",
-        "confidence_interval_80pct": {"lower": lower, "upper": upper},
+        "interval_80pct": band,
+        "interval_method": "calibrated from rolling-backtest errors of this series",
+        "backtest_vs_flat_baseline": verdict,
         "historical_cagr_pct": cagr,
+        "data_scope": f"{basin_scope(basin)}, not basin-only volumes",
     }
 
 
@@ -162,7 +195,8 @@ def _exec_get_kpi_snapshot(inp: dict[str, Any]) -> dict[str, Any]:
     basin = inp["basin"]
     fuel_type = inp["fuel_type"]
     target_year = int(inp["target_year"])
-    wti = float(inp.get("wti_assumption", 75.0))
+    wti = float(inp.get("wti_assumption", DEFAULT_WTI))
+    henry_hub = float(inp.get("henry_hub_assumption", DEFAULT_HENRY_HUB))
 
     bdf = _load_basin(fuel_type, basin)
     if bdf.empty:
@@ -170,13 +204,14 @@ def _exec_get_kpi_snapshot(inp: dict[str, Any]) -> dict[str, Any]:
 
     cutoff_year = int(bdf["ds"].dt.year.max())
     result = _fit_and_forecast(bdf, cutoff_year, target_year, basin=basin, fuel_type=fuel_type)
-    return basin_kpi_summary(result, target_year, wti_price=wti)
+    return basin_kpi_summary(result, target_year, wti_price=wti, henry_hub=henry_hub)
 
 
 def _exec_compare_basins(inp: dict[str, Any]) -> dict[str, Any]:
     fuel_type = inp["fuel_type"]
     target_year = int(inp["target_year"])
-    wti = float(inp.get("wti_assumption", 75.0))
+    wti = float(inp.get("wti_assumption", DEFAULT_WTI))
+    henry_hub = float(inp.get("henry_hub_assumption", DEFAULT_HENRY_HUB))
 
     df = load_production_no_cache(fuel_type=fuel_type, live_fetch=True)
     basins_found = sorted(df["basin"].unique().tolist()) if not df.empty else []
@@ -201,7 +236,7 @@ def _exec_compare_basins(inp: dict[str, Any]) -> dict[str, Any]:
                     "compare_basins: basin=%s Prophet fit took %.1fs (>10s threshold)",
                     basin, _elapsed,
                 )
-            summaries.append(basin_kpi_summary(result, target_year, wti_price=wti))
+            summaries.append(basin_kpi_summary(result, target_year, wti_price=wti, henry_hub=henry_hub))
         except Exception as exc:
             logger.warning("compare_basins: basin=%s failed: %r", basin, exc)
             summaries.append({"basin": basin, "error": str(exc)})
@@ -230,6 +265,7 @@ def _exec_compare_basins(inp: dict[str, Any]) -> dict[str, Any]:
         "fuel_type": fuel_type,
         "target_year": target_year,
         "wti_assumption_per_bbl": wti,
+        "henry_hub_assumption_per_mmbtu": henry_hub,
         "ranked_basins": summaries,
     }
 
@@ -380,7 +416,9 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "name": "forecast_basin",
         "description": (
             "Fit a Prophet model on historical production and forecast through horizon_year. "
-            "Returns projected annual total, 80% confidence interval, and historical CAGR."
+            "Returns the projected annual total, an 80% band calibrated from this series' past "
+            "forecast errors, whether the model has beaten a flat 'repeat last year' baseline at "
+            "this horizon, and historical CAGR. If it has not beaten the baseline, say so."
         ),
         "input_schema": {
             "type": "object",
@@ -403,7 +441,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "name": "get_kpi_snapshot",
         "description": (
             "Full KPI suite for one basin: projected production estimate, YoY growth, "
-            "decline rate, volatility score, and revenue potential at a WTI assumption."
+            "decline rate, volatility score, and revenue potential (oil at the WTI assumption, gas at the Henry Hub assumption)."
         ),
         "input_schema": {
             "type": "object",
@@ -417,6 +455,11 @@ TOOL_SPECS: list[dict[str, Any]] = [
                 "wti_assumption": {
                     "type": "number",
                     "description": "WTI price assumption $/bbl. Default 75.0.",
+                },
+                "henry_hub_assumption": {
+                    "type": "number",
+                    "description": "Henry Hub gas price assumption $/MMBtu, used for gas revenue. "
+                    "Default 3.50.",
                 },
             },
             "required": ["basin", "fuel_type", "target_year"],
@@ -437,6 +480,11 @@ TOOL_SPECS: list[dict[str, Any]] = [
                 "wti_assumption": {
                     "type": "number",
                     "description": "WTI price assumption $/bbl. Default 75.0.",
+                },
+                "henry_hub_assumption": {
+                    "type": "number",
+                    "description": "Henry Hub gas price assumption $/MMBtu, used for gas revenue. "
+                    "Default 3.50.",
                 },
             },
             "required": ["fuel_type", "target_year"],

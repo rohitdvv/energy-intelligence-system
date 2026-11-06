@@ -15,10 +15,15 @@ from agents.tools import execute_tool
 from data.loader import load_production_no_cache
 from data.usgs_loader import get_resource_assessment, resource_adequacy_years, all_assessments_df
 from data.bsee_loader import get_offshore_context
-from kpi.metrics import basin_kpi_summary
+from kpi.metrics import DEFAULT_HENRY_HUB, basin_kpi_summary, price_assumption_text
 from models.forecaster import forecast_basin as _fit
 from ui.hero import render_hero
 from ui.theme import ACCENT, ACCENT_SOFT, GRID, MUTED, SERIES, TRANSPARENT, score_color, style_figure, with_alpha
+
+
+def _md_price(fuel_type: str, wti: float, henry_hub: float) -> str:
+    """Price text with dollar signs escaped, so Streamlit markdown does not read them as math."""
+    return price_assumption_text(fuel_type, wti, henry_hub).replace("$", "\\$")
 
 
 # ------------------------------------------------------------------
@@ -27,7 +32,8 @@ from ui.theme import ACCENT, ACCENT_SOFT, GRID, MUTED, SERIES, TRANSPARENT, scor
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _kpi_for_basin(
-    basin: str, fuel_type: str, target_year: int, wti: float
+    basin: str, fuel_type: str, target_year: int, wti: float,
+    henry_hub: float = DEFAULT_HENRY_HUB,
 ) -> dict[str, Any] | None:
     df = load_production_no_cache(fuel_type=fuel_type, live_fetch=True)
     bdf = df[df["basin"] == basin][["ds", "y"]].dropna().copy()
@@ -35,16 +41,18 @@ def _kpi_for_basin(
         return None
     cutoff = int(bdf["ds"].dt.year.max())
     result = _fit(bdf, cutoff, target_year, basin=basin, fuel_type=fuel_type)
-    return basin_kpi_summary(result, target_year, wti_price=wti)
+    return basin_kpi_summary(result, target_year, wti_price=wti, henry_hub=henry_hub)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _compare_all_basins(
-    fuel_type: str, target_year: int, wti: float
+    fuel_type: str, target_year: int, wti: float,
+    henry_hub: float = DEFAULT_HENRY_HUB,
 ) -> dict[str, Any]:
     return execute_tool(
         "compare_basins",
-        {"fuel_type": fuel_type, "target_year": target_year, "wti_assumption": wti},
+        {"fuel_type": fuel_type, "target_year": target_year, "wti_assumption": wti,
+         "henry_hub_assumption": henry_hub},
     )
 
 
@@ -429,6 +437,7 @@ def render_overview(
     target_year: int,
     wti: float,
     data_through: str | None = None,
+    henry_hub: float = DEFAULT_HENRY_HUB,
 ) -> None:
     """Render the Overview page, led by the animated hero."""
 
@@ -443,7 +452,7 @@ def render_overview(
     # --- KPI cards ---
     with st.spinner("Loading KPIs…"):
         try:
-            kpi = _kpi_for_basin(basin, fuel_type, target_year, wti)
+            kpi = _kpi_for_basin(basin, fuel_type, target_year, wti, henry_hub)
         except Exception as exc:
             kpi = None
             st.warning(f"KPI computation failed: {exc}", icon=":material/warning:")
@@ -510,7 +519,7 @@ def render_overview(
         c4.metric(
             "Revenue Potential",
             f"${rev_m * 12:,.0f}M/yr" if rev_m is not None else "N/A",
-            help=f"Gross potential at WTI ${wti}/bbl (annualised)",
+            help=f"Gross value of the state-level volume at {_md_price(fuel_type, wti, henry_hub)}, before royalties, taxes and costs (annualised). A size measure, not investable revenue.",
         )
     else:
         for col in (c1, c2, c3, c4):
@@ -529,7 +538,7 @@ def render_overview(
 
     with st.spinner("Fitting forecasts for all 7 basins…"):
         try:
-            cmp = _compare_all_basins(fuel_type, target_year, wti)
+            cmp = _compare_all_basins(fuel_type, target_year, wti, henry_hub)
         except Exception as exc:
             st.error(f"Comparison failed: {exc}")
             return
@@ -603,12 +612,12 @@ def render_overview(
 
     with col_rev:
         st.markdown("##### Revenue Potential by Basin")
-        st.caption("Estimated gross revenue at your WTI assumption (annualised, $M/year)")
+        st.caption(f"Gross value at {_md_price(fuel_type, wti, henry_hub)}, before royalties, taxes and costs (\\$M/year). State totals, so overlapping basins share volume.")
         _render_revenue_bar(ranked, basin, wti)
 
     with col_rpi:
         st.markdown("##### RPI Leaderboard")
-        st.caption("Relative Performance Index 0–100 — combines production, growth, revenue & stability")
+        st.caption("Relative Performance Index 0–100: projected volume rescaled so the largest is 100 and the smallest is 0. It measures size, not performance.")
         _render_rpi_bar(ranked, basin)
 
     # ── Row 3: Growth vs Risk matrix (beginner-friendly full-width) ───────────

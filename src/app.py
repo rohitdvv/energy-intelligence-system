@@ -15,8 +15,9 @@ import anthropic
 import streamlit as st
 
 from config import check_secrets, get_anthropic_key
-from data.eia import BASINS
+from data.eia import BASIN_STATES, BASINS
 from data.loader import load_production
+from kpi.metrics import DEFAULT_HENRY_HUB, DEFAULT_WTI
 from ui.access import require_access
 from ui.chat import render_chat
 from ui.committee import render_committee
@@ -30,21 +31,17 @@ from ui.theme import APP_CSS, page_header
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
 
-_BASIN_DISPLAY: dict[str, str] = {
-    "Permian":     "Permian (TX · NM)",
-    "Bakken":      "Bakken (ND)",
-    "Eagle Ford":  "Eagle Ford (TX)",
-    "Marcellus":   "Marcellus (PA · WV)",
-    "Haynesville": "Haynesville (LA)",
-    "Anadarko":    "Anadarko (OK)",
-    "Appalachian": "Appalachian (PA · WV · OH)",
-}
+def _basin_label(basin: str) -> str:
+    """Basin name plus the states its figures actually add up."""
+    return f"{basin} · {BASIN_STATES.get(basin, '?')} state data"
+
 
 _FILTER_DEFAULTS: dict[str, object] = {
     "basin": BASINS[0],
     "fuel_type": "oil",
     "target_year": 2028,
-    "wti": 75.0,
+    "wti": DEFAULT_WTI,
+    "henry_hub": DEFAULT_HENRY_HUB,
 }
 
 
@@ -77,21 +74,34 @@ def _context() -> tuple[str, str, int, float]:
     return s["basin"], s["fuel_type"], int(s["target_year"]), float(s["wti"])
 
 
+def _henry_hub() -> float:
+    return float(st.session_state["henry_hub"])
+
+
 def _filter_bar() -> None:
     with st.container(border=True):
-        c_basin, c_fuel, c_year, c_wti, c_refresh = st.columns(
-            [2.2, 1.3, 2.4, 1.4, 1.0], vertical_alignment="bottom"
+        c_basin, c_fuel, c_year, c_price, c_refresh = st.columns(
+            [2.4, 1.3, 2.3, 1.5, 1.0], vertical_alignment="bottom"
         )
         c_basin.selectbox(
-            "Basin", BASINS, key="basin", format_func=lambda b: _BASIN_DISPLAY.get(b, b)
+            "Basin", BASINS, key="basin", format_func=_basin_label,
+            help="EIA reports production by state, so each basin is the sum of whole states. "
+            "Eagle Ford is all of Texas and Permian is Texas plus New Mexico, so they overlap.",
         )
         c_fuel.radio(
             "Fuel", ["oil", "gas"], key="fuel_type", horizontal=True, format_func=str.title
         )
         c_year.slider("Target year", 2015, 2030, key="target_year")
-        c_wti.number_input(
-            "WTI ($/bbl)", min_value=40.0, max_value=150.0, step=1.0, key="wti"
-        )
+        if st.session_state["fuel_type"] == "gas":
+            c_price.number_input(
+                "Henry Hub ($/MMBtu)", min_value=1.0, max_value=20.0, step=0.25, key="henry_hub",
+                help="Gas price used for gas revenue and well economics.",
+            )
+        else:
+            c_price.number_input(
+                "WTI ($/bbl)", min_value=40.0, max_value=150.0, step=1.0, key="wti",
+                help="Oil price used for oil revenue and well economics.",
+            )
         if c_refresh.button(
             "Refresh",
             icon=":material/refresh:",
@@ -116,27 +126,29 @@ def _data_through(fuel_type: str) -> str | None:
 
 def _overview_page() -> None:
     basin, fuel_type, target_year, wti = _context()
-    render_overview(basin, fuel_type, target_year, wti, data_through=_data_through(fuel_type))
+    render_overview(basin, fuel_type, target_year, wti, data_through=_data_through(fuel_type),
+                    henry_hub=_henry_hub())
 
 
 def _eyebrow() -> str:
     basin, fuel_type, target_year, _ = _context()
-    return f"{basin} · {fuel_type.title()} · {target_year}"
+    return f"{basin} ({BASIN_STATES.get(basin, '?')} state data) · {fuel_type.title()} · {target_year}"
 
 
 def _forecast_page() -> None:
     page_header(
         eyebrow=_eyebrow(),
         title="Forecast",
-        description="Monthly production history and a Prophet forecast with an 80% band. "
-        "Move the cutoff to see how the forecast changes.",
+        description="Monthly production history, a Prophet forecast and a simple baseline. "
+        "The 80% band comes from the model's past errors. Move the cutoff to see how the "
+        "forecast changes.",
     )
     render_forecast(*_context())
 
 
 def _map_page() -> None:
     page_header("Map", "Click a basin to select it on every page.", eyebrow=_eyebrow())
-    render_map(*_context())
+    render_map(*_context(), henry_hub=_henry_hub())
 
 
 def _committee_page() -> None:
@@ -147,7 +159,8 @@ def _committee_page() -> None:
         description="A bull and a bear analyst argue the case with live data, then a portfolio "
         "manager makes a recommendation. AI output for research, not investment advice.",
     )
-    render_committee(basin, fuel_type, target_year, wti, _anthropic_client())
+    render_committee(basin, fuel_type, target_year, wti, _anthropic_client(),
+                     henry_hub=_henry_hub())
 
 
 def _memo_page() -> None:
@@ -162,10 +175,10 @@ def _economics_page() -> None:
     page_header(
         eyebrow=_eyebrow(),
         title="Well Economics",
-        description="Single-well decline curve and discounted cash flow. Inputs are illustrative "
-        "basin defaults; edit them to match your case.",
+        description="Single-well decline curve and discounted cash flow after royalty, taxes "
+        "and operating costs. Inputs are illustrative basin defaults; edit them to match your case.",
     )
-    render_economics(basin, fuel_type, wti)
+    render_economics(basin, fuel_type, wti, henry_hub=_henry_hub())
 
 
 def _analyst_page() -> None:

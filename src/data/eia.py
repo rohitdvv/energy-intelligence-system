@@ -52,6 +52,30 @@ _BASIN_OIL_AREAS: dict[str, list[str]] = {
     "Appalachian":  ["SPA", "SWV", "SOH"],  # PA + WV + Ohio
 }
 
+# What each basin label actually measures. EIA publishes production by state,
+# so every "basin" is the sum of whole states, and basins that share a state
+# overlap: Eagle Ford is all of Texas, and Permian is Texas plus New Mexico.
+BASIN_STATES: dict[str, str] = {
+    "Permian":     "TX + NM",
+    "Bakken":      "ND",
+    "Eagle Ford":  "TX",
+    "Marcellus":   "PA + WV",
+    "Haynesville": "LA",
+    "Anadarko":    "OK",
+    "Appalachian": "PA + WV + OH",
+}
+
+
+def basin_scope(basin: str) -> str:
+    """Plain description of the states behind a basin label, e.g. 'all of TX'."""
+    states = BASIN_STATES.get(basin, "")
+    if not states:
+        return "state totals"
+    if "+" in states:
+        return f"{states} state totals"
+    return f"all of {states}"
+
+
 _BASIN_GAS_AREAS: dict[str, list[str]] = {
     "Permian":      ["STX", "SNM"],
     "Bakken":       ["SND"],

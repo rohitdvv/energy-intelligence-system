@@ -41,8 +41,8 @@
   │  forecaster.py ──► Prophet              │               │
   │    • Multiplicative seasonality         │               │
   │    • Changepoint prior 0.05             │               │
-  │    • 80% confidence interval            │               │
-  │    • Held-out MAPE backtest             │               │
+  │    • 80% band from backtest errors      │               │
+  │    • Rolling backtest vs baseline       │               │
   │                                         │               │
   │  metrics.py ──► KPI Engine              │               │
   │    • Projected Production               │               │
@@ -147,7 +147,9 @@ src/
 │   └── fetch_all.py          # CLI pre-fetch script
 ├── models/
 │   ├── forecaster.py         # ForecastResult dataclass + forecast_basin()
-│   ├── backtest.py           # Held-out MAPE backtest
+│   ├── backtest.py           # Held-out MAPE backtest (legacy)
+│   ├── calibration.py        # Rolling backtest, calibrated bands, baseline check
+│   ├── well_economics.py     # Decline curve and DCF math
 │   └── xgb_forecaster.py     # XGBoost recursive forecaster (retained for future use)
 ├── kpi/
 │   └── metrics.py            # Six KPI functions + basin_kpi_summary()

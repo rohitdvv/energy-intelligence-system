@@ -10,33 +10,29 @@ import streamlit as st
 
 from agents.tools import execute_tool
 from data.loader import load_production_no_cache
+from models.calibration import apply_monthly_band, run_backtest
 from models.forecaster import forecast_basin as _fit
 from ui.theme import FLARE, MUTED, RED, STEEL, TRANSPARENT, style_figure, with_alpha
 
 _NOW_YEAR = datetime.now().year
 
 _METHODOLOGY = """\
-**Model:** Facebook Prophet (Meta Research, 2017)
+**Model:** Prophet (Meta, 2017): a trend with changepoints times a yearly seasonal pattern \
+(multiplicative seasonality, changepoint prior scale 0.05). Prices, rig counts and completions \
+are not inputs, so the forecast assumes the recent trend continues.
 
-**Why Prophet?** Monthly production series have clear yearly seasonality (seasonal drilling \
-cycles, maintenance windows) and irregular changepoints (price shocks, regulation). Prophet \
-handles both without manual feature engineering, and its uncertainty intervals are legible \
-to a non-statistician.
+**80% band:** taken from the model's own past misses, not from Prophet's built-in interval, \
+which covered only about half of actual months when tested. The model is refit at each of the \
+last eight year-ends using only data up to that point, and the band at each horizon is set so \
+that about 80% of those past misses would have fallen inside it. Beyond the three tested years \
+the band widens with the square root of the horizon, which is an assumption.
 
-**Seasonality mode:** Multiplicative — production volumes scale proportionally with the trend \
-level. A 5 % seasonal amplitude means more absolute barrels when the basin is growing vs. \
-contracting. Additive would understate seasonal amplitude in high-growth phases.
+**Baseline:** the dotted line repeats the last 12 months before the cutoff. A forecast is only \
+worth reading as a forecast where it has beaten that baseline in the backtest.
 
-**Changepoint prior scale:** 0.05 — moderate flexibility. Higher → overfits noise as \
-structural breaks; lower → misses genuine inflection points (e.g. shale boom, COVID).
-
-**Confidence interval:** 80 % posterior predictive interval from Monte Carlo sampling of \
-the Prophet parameter posterior. Does **not** capture exogenous risk (geopolitical, \
-regulatory, capital allocation).
-
-**Limitations:** Assumes trend continuity beyond the cutoff. Does not incorporate commodity \
-prices, rig counts, or completion activity. Suitable for directional planning only; not a \
-reserve study or formal reserves estimate.
+**Caveats:** backtests use today's revised data, the windows overlap in time, and basins that \
+share a state share errors, so treat small differences as ties. Basin figures are state totals. \
+Directional planning only; not a reserves estimate.
 """
 
 
@@ -63,18 +59,32 @@ def _cached_anomalies(basin: str, fuel_type: str) -> dict[str, Any]:
 
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def _cached_backtest(basin: str, fuel_type: str) -> dict[str, Any] | None:
-    from data.loader import load_production_no_cache
-    from models.backtest import backtest_mape
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def _cached_backtest(basin: str, fuel_type: str) -> dict[str, Any]:
+    """Rolling-origin backtest for one series; the basis of the band and baseline check."""
     df = load_production_no_cache(fuel_type=fuel_type, live_fetch=True)
     bdf = df[df["basin"] == basin][["ds", "y"]].dropna().copy()
-    if len(bdf) < 24:
-        return None
     try:
-        return backtest_mape(bdf, basin, fuel_type)
+        bt = run_backtest(bdf)
     except Exception as exc:
         return {"error": str(exc)}
+    bt.pop("monthly", None)
+    bt.pop("annual", None)
+    return bt
+
+
+def _baseline(fc_df: pd.DataFrame) -> pd.DataFrame:
+    """Seasonal naive: the last 12 months before the cutoff, repeated."""
+    hist = fc_df[~fc_df["is_forecast"]].dropna(subset=["y_actual"])
+    fut = fc_df[fc_df["is_forecast"]]
+    if len(hist) < 12 or fut.empty:
+        return pd.DataFrame(columns=["ds", "y"])
+    last = hist.tail(12)
+    by_month = dict(zip(pd.to_datetime(last["ds"]).dt.month, last["y_actual"]))
+    return pd.DataFrame({
+        "ds": fut["ds"],
+        "y": [by_month.get(m) for m in pd.to_datetime(fut["ds"]).dt.month],
+    })
 
 
 # ------------------------------------------------------------------
@@ -87,6 +97,7 @@ def _build_chart(
     anomalies: dict[str, Any],
     basin: str,
     fuel_type: str,
+    calibrated: bool = False,
 ) -> go.Figure:
     df = fc_df.copy()
     df["ds"] = pd.to_datetime(df["ds"])
@@ -115,7 +126,8 @@ def _build_chart(
             x=ci_x, y=ci_y, fill="toself",
             fillcolor=with_alpha(FLARE, 0.16),
             line=dict(color=TRANSPARENT),
-            name="80% CI", hoverinfo="skip",
+            name="80% band (from past errors)" if calibrated else "80% band (Prophet, uncalibrated)",
+            hoverinfo="skip",
         ))
         # Forecast line
         fig.add_trace(go.Scatter(
@@ -125,6 +137,15 @@ def _build_chart(
             mode="lines",
             hovertemplate="%{y:,.1f}<extra>Forecast</extra>",
         ))
+        base = _baseline(df)
+        if not base.empty:
+            fig.add_trace(go.Scatter(
+                x=base["ds"], y=base["y"],
+                name="Baseline (last 12 months repeated)",
+                line=dict(color=MUTED, width=1.4, dash="dot"),
+                mode="lines",
+                hovertemplate="%{y:,.1f}<extra>Baseline</extra>",
+            ))
 
     # Cutoff vertical line — Plotly 5.x requires a numeric x value (ms since epoch)
     # on datetime axes; ISO strings cause "unsupported operand type" internally.
@@ -247,11 +268,18 @@ def _interactive_chart(basin: str, fuel_type: str, target_year: int) -> None:
         )
         return
 
+    with st.spinner("Backtesting the model on past years…"):
+        bt = _cached_backtest(basin, fuel_type)
+    calibrated = "error" not in bt
+    if calibrated:
+        fc_df = apply_monthly_band(fc_df, cutoff_year, bt)
+
     with st.spinner("Loading anomaly detection…"):
         anom = _cached_anomalies(basin, fuel_type)
 
-    fig = _build_chart(fc_df, cutoff_year, anom, basin, fuel_type)
+    fig = _build_chart(fc_df, cutoff_year, anom, basin, fuel_type, calibrated)
     st.plotly_chart(fig, use_container_width=True)
+    _reliability(bt, target_year - cutoff_year)
 
     anom_list = anom.get("anomalies", []) if "error" not in anom else []
     n = len(anom_list)
@@ -275,34 +303,55 @@ def _interactive_chart(basin: str, fuel_type: str, target_year: int) -> None:
             st.dataframe(_pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
+def _reliability(bt: dict[str, Any], horizon_years: int) -> None:
+    """Tell the reader how far to trust the forecast, from the rolling backtest."""
+    if "error" in bt:
+        st.caption(f"Reliability check unavailable: {bt['error']} The band shown is Prophet's own, "
+                   "which has been too narrow in past tests.")
+        return
+    rows = bt["by_year"]
+    k = max(1, horizon_years)
+    row = next((r for r in rows if r["year"] == k), rows[-1])
+    beyond = k > row["year"]
+    model, flat = row["model_mape_annual"], row["flat_mape_annual"]
+    years = f"{row['year']} year{'s' if row['year'] > 1 else ''}"
+    if round(model, 6) < round(flat, 6):
+        st.success(
+            f"At {years} ahead this model has beaten the baseline: average annual error "
+            f"{model:.1f}% against {flat:.1f}% for repeating the last year "
+            f"({row['windows']} past tests)."
+            + (f" The target is {k} years out, past what has been tested." if beyond else ""),
+            icon=":material/verified:",
+        )
+    else:
+        st.warning(
+            f"At {years} ahead this model has done worse than simply repeating the last year: "
+            f"average annual error {model:.1f}% against {flat:.1f}% ({row['windows']} past tests). "
+            "Treat the forecast line as a scenario, and the baseline as the better guess."
+            + (f" The target is {k} years out, past what has been tested." if beyond else ""),
+            icon=":material/warning:",
+        )
+
+    table = pd.DataFrame([{
+        "Years ahead": r["year"],
+        "Past tests": r["windows"],
+        "Model error, annual": f"{r['model_mape_annual']:.1f}%",
+        "Baseline error, annual": f"{r['flat_mape_annual']:.1f}%",
+        "Model error, monthly": f"{r['model_mape_monthly']:.1f}%",
+        "Baseline error, monthly": f"{r['naive_mape_monthly']:.1f}%",
+        "80% band, annual": f"±{r['band_annual'] * 100:.0f}%",
+    } for r in rows])
+    with st.expander("Backtest detail", icon=":material/fact_check:"):
+        st.caption(
+            f"The model was refit at each year-end from {bt['origins'][0]} to {bt['origins'][-1]} "
+            "using only data up to that point. Errors are mean absolute percentage errors."
+        )
+        st.dataframe(table, use_container_width=True, hide_index=True)
+
+
 def render_forecast(basin: str, fuel_type: str, target_year: int, _wti: float) -> None:
     """Render the Forecast tab."""
     _interactive_chart(basin, fuel_type, target_year)
 
     with st.expander("Forecast methodology", icon=":material/menu_book:"):
         st.markdown(_METHODOLOGY)
-
-        st.markdown("---")
-        st.markdown("**Backtest reliability** (12-month held-out MAPE):")
-        with st.spinner("Running backtest…"):
-            bt = _cached_backtest(basin, fuel_type)
-        if bt is None:
-            st.caption("Insufficient data for backtest (< 24 months).")
-        elif "error" in bt:
-            st.caption(f"Backtest unavailable: {bt['error']}")
-        else:
-            mape = bt["mape_pct"]
-            quality = (
-                "EXCELLENT" if mape < 5 else
-                "GOOD"      if mape < 10 else
-                "OK"        if mape < 20 else
-                "POOR"
-            )
-            st.metric(
-                f"{basin} {fuel_type.upper()} MAPE",
-                f"{mape:.1f}%",
-                help=(
-                    f"{quality} — mean absolute % error on {bt['n_predictions']} "
-                    f"held-out months ({bt['test_start']} → {bt['test_end']})"
-                ),
-            )

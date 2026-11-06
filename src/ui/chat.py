@@ -97,21 +97,23 @@ def _try_forecast_basin(tc: dict[str, Any]) -> go.Figure | None:
     basin  = r.get("basin", "")
     year   = r.get("horizon_year", "")
     total  = r["projected_annual_total"]
-    lower  = r.get("confidence_interval_80pct", {}).get("lower", total * 0.85)
-    upper  = r.get("confidence_interval_80pct", {}).get("upper", total * 1.15)
+    band   = r.get("interval_80pct") or {}
+    lower  = band.get("lower")
+    upper  = band.get("upper")
     unit   = r.get("unit", "")
     cagr   = r.get("historical_cagr_pct")
+    has_band = lower is not None and upper is not None
+    band_note = f"<br>80% band: {lower:,.0f} – {upper:,.0f}" if has_band else ""
 
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=[f"{basin} {year}"],
         y=[total],
         error_y=dict(type="data", symmetric=False,
-                     array=[upper - total], arrayminus=[total - lower]),
+                     array=[upper - total], arrayminus=[total - lower]) if has_band else None,
         marker_color=ORANGE,
         width=0.4,
-        hovertemplate=f"<b>{basin}</b><br>Projected: {{y:,.0f}} {unit}<br>"
-                      f"80% CI: {lower:,.0f} – {upper:,.0f}<extra></extra>",
+        hovertemplate=f"<b>{basin}</b><br>Projected: {{y:,.0f}} {unit}{band_note}<extra></extra>",
     ))
     cagr_note = f"  |  Historical CAGR {cagr:+.1f}%" if cagr is not None else ""
     style_figure(fig, height=220, margin=dict(t=36, b=20, l=8, r=8))
