@@ -35,7 +35,7 @@ _EXAMPLES: list[str] = [
     "Compare all basins for gas production in 2026.",
     "What anomalies has the Eagle Ford seen historically?",
     "What is the YoY growth for Bakken oil?",
-    "How does Haynesville's revenue potential compare to Marcellus?",
+    "How does Haynesville's revenue potential compare to Appalachia?",
 ]
 
 

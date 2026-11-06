@@ -1,14 +1,21 @@
 """EIA Open Data API v2 client for U.S. oil and gas production data.
 
-Basin-level data is approximated by aggregating state-level production
-figures from the EIA crude oil and natural gas production endpoints.
-State-to-basin mappings use EIA duoarea codes (convention: "S" + USPS
-2-letter state abbreviation, e.g. "STX" = Texas).
+Basin figures come from EIA's own regional production estimates, published
+with the Short-Term Energy Outlook (STEO). EIA builds each region from the
+counties over the play, so the regions do not overlap: Permian is West Texas
+and southeast New Mexico, Eagle Ford is South Texas, and Appalachia covers
+the Marcellus and Utica. STEO series are daily rates (million b/d for oil,
+billion cubic feet per day of marketed gas) and are converted to monthly
+volumes here. STEO data also contains EIA's forecast, so months after the
+latest month of EIA's reported state data are dropped.
+
+Anadarko has no STEO region, so it is still the Oklahoma state total.
 
 Endpoints used:
-  Oil  : api.eia.gov/v2/petroleum/crd/crpdn/data  (Mbbls/month)
-  Gas  : api.eia.gov/v2/natural-gas/prod/sum/data  (MMcf/month)
-  WTI  : api.eia.gov/v2/petroleum/pri/spt/data     ($/bbl)
+  Regions : api.eia.gov/v2/steo/data                 (COPR<code>, NGMP<code>)
+  Oil     : api.eia.gov/v2/petroleum/crd/crpdn/data  (Mbbls/month, state level)
+  Gas     : api.eia.gov/v2/natural-gas/prod/sum/data (MMcf/month, state level)
+  WTI     : api.eia.gov/v2/petroleum/pri/spt/data    ($/bbl)
 """
 from __future__ import annotations
 
@@ -33,63 +40,72 @@ BASINS: list[str] = [
     "Permian",
     "Bakken",
     "Eagle Ford",
-    "Marcellus",
     "Haynesville",
+    "Appalachia",
     "Anadarko",
-    "Appalachian",
 ]
 
-# Basin → EIA duoarea codes (state proxies).
-# Limitation: Texas (STX) covers both Permian and Eagle Ford; when fetching
-# either individually the returned total will reflect all TX production.
-_BASIN_OIL_AREAS: dict[str, list[str]] = {
-    "Permian":      ["STX", "SNM"],       # Texas + New Mexico
-    "Bakken":       ["SND"],              # North Dakota
-    "Eagle Ford":   ["STX"],              # Texas
-    "Marcellus":    ["SPA", "SWV"],       # Pennsylvania + West Virginia
-    "Haynesville":  ["SLA"],              # Louisiana
-    "Anadarko":     ["SOK"],              # Oklahoma
-    "Appalachian":  ["SPA", "SWV", "SOH"],  # PA + WV + Ohio
+# Basin → STEO region code. Series are COPR<code> (crude oil, million b/d)
+# and NGMP<code> (marketed natural gas, Bcf/d).
+STEO_REGIONS: dict[str, str] = {
+    "Permian":     "PM",
+    "Bakken":      "BK",
+    "Eagle Ford":  "EF",
+    "Haynesville": "HA",
+    "Appalachia":  "AP",
 }
 
-# What each basin label actually measures. EIA publishes production by state,
-# so every "basin" is the sum of whole states, and basins that share a state
-# overlap: Eagle Ford is all of Texas, and Permian is Texas plus New Mexico.
-BASIN_STATES: dict[str, str] = {
-    "Permian":     "TX + NM",
-    "Bakken":      "ND",
-    "Eagle Ford":  "TX",
-    "Marcellus":   "PA + WV",
-    "Haynesville": "LA",
-    "Anadarko":    "OK",
-    "Appalachian": "PA + WV + OH",
+# Basins without a STEO region fall back to whole-state EIA data.
+_STATE_PROXY_AREAS: dict[str, list[str]] = {
+    "Anadarko": ["SOK"],
+}
+
+# What each basin's figures measure, shown next to every number.
+BASIN_SOURCE: dict[str, str] = {
+    "Permian":     "EIA region",
+    "Bakken":      "EIA region",
+    "Eagle Ford":  "EIA region",
+    "Haynesville": "EIA region",
+    "Appalachia":  "EIA region",
+    "Anadarko":    "OK state data",
+}
+
+_SCOPE: dict[str, str] = {
+    "Permian":     "EIA's Permian region (West Texas and southeast New Mexico counties)",
+    "Bakken":      "EIA's Bakken region (North Dakota and Montana counties)",
+    "Eagle Ford":  "EIA's Eagle Ford region (South Texas counties)",
+    "Haynesville": "EIA's Haynesville region (Louisiana and East Texas counties)",
+    "Appalachia":  "EIA's Appalachia region (Marcellus and Utica counties in PA, WV and OH)",
+    "Anadarko":    "all of Oklahoma (state data; EIA publishes no Anadarko region)",
 }
 
 
 def basin_scope(basin: str) -> str:
-    """Plain description of the states behind a basin label, e.g. 'all of TX'."""
-    states = BASIN_STATES.get(basin, "")
-    if not states:
-        return "state totals"
-    if "+" in states:
-        return f"{states} state totals"
-    return f"all of {states}"
+    """Plain description of what a basin's figures cover."""
+    return _SCOPE.get(basin, "unknown scope")
 
 
-_BASIN_GAS_AREAS: dict[str, list[str]] = {
-    "Permian":      ["STX", "SNM"],
-    "Bakken":       ["SND"],
-    "Eagle Ford":   ["STX"],
-    "Marcellus":    ["SPA", "SWV"],
-    "Haynesville":  ["SLA"],
-    "Anadarko":     ["SOK"],
-    "Appalachian":  ["SPA", "SWV", "SOH"],
-}
+def is_state_proxy(basin: str) -> bool:
+    return basin in _STATE_PROXY_AREAS
 
 
 def _start_date() -> str:
     """ISO-8601 month string 15 years before today."""
     return (datetime.now() - timedelta(days=365 * 15)).strftime("%Y-%m")
+
+
+def steo_rows_to_monthly(rows: list[dict[str, Any]], last_reported: pd.Timestamp) -> pd.DataFrame:
+    """Convert STEO daily-rate rows to monthly volumes, dropping forecast months.
+
+    Oil: million b/d x 1,000 x days in month = Mbbls/month.
+    Gas: Bcf/d x 1,000 x days in month = MMcf/month.
+    """
+    df = pd.DataFrame(rows)
+    df["ds"] = pd.to_datetime(df["period"])
+    rate = pd.to_numeric(df["value"], errors="coerce")
+    df["y"] = rate * 1_000 * df["ds"].dt.days_in_month
+    df = df[df["ds"] <= last_reported].dropna(subset=["y"])
+    return df.sort_values("ds").reset_index(drop=True)
 
 
 def _empty_frame() -> pd.DataFrame:
@@ -105,6 +121,7 @@ class EIAClient:
         self._api_key = get_eia_key()
         self._session = requests.Session()
         self._session.headers["User-Agent"] = "EnergyIntelligenceSystem/1.0"
+        self._reported: dict[str, pd.Timestamp] = {}
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -210,32 +227,73 @@ class EIAClient:
     # Public API
     # ------------------------------------------------------------------
 
-    def fetch_oil_production_by_basin(self, basin_name: str) -> pd.DataFrame:
-        """Monthly crude oil production proxy for *basin_name*.
+    def _last_reported_month(self, fuel_type: str) -> pd.Timestamp:
+        """Latest month of EIA's reported U.S. production; later STEO months are forecast."""
+        if fuel_type not in self._reported:
+            route, process = (
+                ("petroleum/crd/crpdn/data", "FPF") if fuel_type == "oil"
+                else ("natural-gas/prod/sum/data", "VGM")
+            )
+            try:
+                payload = self._get(route, [
+                    ("frequency", "monthly"),
+                    ("data[0]", "value"),
+                    ("facets[duoarea][]", "NUS"),
+                    ("facets[process][]", process),
+                    ("sort[0][column]", "period"),
+                    ("sort[0][direction]", "desc"),
+                    ("length", "1"),
+                ])
+                rows = payload.get("response", {}).get("data", [])
+                self._reported[fuel_type] = pd.Timestamp(rows[0]["period"])
+            except Exception as exc:  # noqa: BLE001 — fall back to a safe lag
+                logger.warning("Could not read EIA's latest reported month: %s", redact(exc))
+                today = pd.Timestamp.now().normalize().replace(day=1)
+                self._reported[fuel_type] = today - pd.DateOffset(months=3)
+        return self._reported[fuel_type]
 
-        Returns columns: ds (datetime), y (Mbbls/month), basin (str),
-        fuel_type='oil'.
-        """
-        areas = _BASIN_OIL_AREAS.get(basin_name)
+    def _fetch_steo_region(self, basin_name: str, fuel_type: str) -> pd.DataFrame:
+        """Monthly volumes for one STEO region, history only."""
+        code = STEO_REGIONS[basin_name]
+        series = f"COPR{code}" if fuel_type == "oil" else f"NGMP{code}"
+        payload = self._get("steo/data", [
+            ("frequency", "monthly"),
+            ("data[0]", "value"),
+            ("facets[seriesId][]", series),
+            ("start", _start_date()),
+            ("sort[0][column]", "period"),
+            ("sort[0][direction]", "asc"),
+            ("length", "5000"),
+        ])
+        rows: list[dict[str, Any]] = payload.get("response", {}).get("data", [])
+        if not rows:
+            logger.warning("No STEO rows for %s (%s)", basin_name, series)
+            return _empty_frame()
+        df = steo_rows_to_monthly(rows, self._last_reported_month(fuel_type))
+        df["basin"] = basin_name
+        df["fuel_type"] = fuel_type
+        return df[["ds", "y", "basin", "fuel_type"]]
+
+    def fetch_oil_production_by_basin(self, basin_name: str) -> pd.DataFrame:
+        """Monthly crude oil production for *basin_name*, in Mbbls/month."""
+        if basin_name in STEO_REGIONS:
+            return self._fetch_steo_region(basin_name, "oil")
+        areas = _STATE_PROXY_AREAS.get(basin_name)
         if areas is None:
             raise ValueError(f"Unknown basin {basin_name!r}. Valid: {BASINS}")
         return self._fetch_production(
-            "petroleum/crd/crpdn/data", areas, basin_name, "oil",
-            process_code="FPF",
+            "petroleum/crd/crpdn/data", areas, basin_name, "oil", process_code="FPF",
         )
 
     def fetch_gas_production_by_basin(self, basin_name: str) -> pd.DataFrame:
-        """Monthly natural gas production proxy for *basin_name*.
-
-        Returns columns: ds (datetime), y (MMcf/month), basin (str),
-        fuel_type='gas'.
-        """
-        areas = _BASIN_GAS_AREAS.get(basin_name)
+        """Monthly marketed natural gas production for *basin_name*, in MMcf/month."""
+        if basin_name in STEO_REGIONS:
+            return self._fetch_steo_region(basin_name, "gas")
+        areas = _STATE_PROXY_AREAS.get(basin_name)
         if areas is None:
             raise ValueError(f"Unknown basin {basin_name!r}. Valid: {BASINS}")
         return self._fetch_production(
-            "natural-gas/prod/sum/data", areas, basin_name, "gas",
-            process_code="VGM",
+            "natural-gas/prod/sum/data", areas, basin_name, "gas", process_code="VGM",
         )
 
     def fetch_wti_spot_price(self) -> pd.DataFrame:

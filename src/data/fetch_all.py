@@ -9,8 +9,8 @@ API keys must be in a .env file at the project root or in environment variables:
     ANTHROPIC_API_KEY=...
 
 Output files (data/raw/):
-    eia_oil_<basin>.parquet     — crude oil production proxy (Mbbls/month)
-    eia_gas_<basin>.parquet     — natural gas production proxy (MMcf/month)
+    eia_oil_<basin>_v2.parquet  — crude oil production, EIA region (Mbbls/month)
+    eia_gas_<basin>_v2.parquet  — marketed gas production, EIA region (MMcf/month)
     wti_prices.parquet          — WTI spot price from FRED ($/bbl, monthly)
 
 A failed individual fetch prints a warning and continues; it does not abort
@@ -30,6 +30,7 @@ if str(_SRC) not in sys.path:
 import pandas as pd  # noqa: E402  (after sys.path patch)
 
 from data.eia import BASINS, EIAClient  # noqa: E402
+from data.loader import production_path  # noqa: E402
 from data.fred import FREDClient  # noqa: E402
 
 logging.basicConfig(
@@ -56,10 +57,6 @@ def _save(df: pd.DataFrame, stem: str) -> None:
     logger.info("  ✓  %s  (%d rows)", path.name, len(df))
 
 
-def _basin_slug(basin_name: str) -> str:
-    return basin_name.lower().replace(" ", "_")
-
-
 # ------------------------------------------------------------------
 # Main
 # ------------------------------------------------------------------
@@ -78,11 +75,10 @@ def main() -> None:
 
     # --- EIA: crude oil production ---
     for basin in BASINS:
-        slug = _basin_slug(basin)
         try:
             logger.info("EIA oil  — %s", basin)
             df = eia.fetch_oil_production_by_basin(basin)
-            _save(df, f"eia_oil_{slug}")
+            _save(df, production_path("oil", basin).stem)
             success += 1
         except Exception as exc:
             logger.warning("FAILED oil fetch — %s: %s", basin, exc)
@@ -90,11 +86,10 @@ def main() -> None:
 
     # --- EIA: natural gas production ---
     for basin in BASINS:
-        slug = _basin_slug(basin)
         try:
             logger.info("EIA gas  — %s", basin)
             df = eia.fetch_gas_production_by_basin(basin)
-            _save(df, f"eia_gas_{slug}")
+            _save(df, production_path("gas", basin).stem)
             success += 1
         except Exception as exc:
             logger.warning("FAILED gas fetch — %s: %s", basin, exc)

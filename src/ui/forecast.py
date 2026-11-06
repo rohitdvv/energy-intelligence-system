@@ -30,8 +30,8 @@ the band widens with the square root of the horizon, which is an assumption.
 **Baseline:** the dotted line repeats the last 12 months before the cutoff. A forecast is only \
 worth reading as a forecast where it has beaten that baseline in the backtest.
 
-**Caveats:** backtests use today's revised data, the windows overlap in time, and basins that \
-share a state share errors, so treat small differences as ties. Basin figures are state totals. \
+**Caveats:** backtests use today's revised data and the windows overlap in time, so treat \
+small differences as ties. Basin figures are EIA regional estimates, and EIA revises them. \
 Directional planning only; not a reserves estimate.
 """
 

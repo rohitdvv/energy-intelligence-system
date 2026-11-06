@@ -519,7 +519,7 @@ def render_overview(
         c4.metric(
             "Revenue Potential",
             f"${rev_m * 12:,.0f}M/yr" if rev_m is not None else "N/A",
-            help=f"Gross value of the state-level volume at {_md_price(fuel_type, wti, henry_hub)}, before royalties, taxes and costs (annualised). A size measure, not investable revenue.",
+            help=f"Gross value of the basin volume at {_md_price(fuel_type, wti, henry_hub)}, before royalties, taxes and costs (annualised). A size measure, not investable revenue.",
         )
     else:
         for col in (c1, c2, c3, c4):
@@ -534,9 +534,9 @@ def render_overview(
 
     # --- Basin comparison ---
     st.subheader(f"Basin comparison · {fuel_type.title()} · {target_year}", anchor=False)
-    st.caption("First load fits Prophet for all 7 basins — allow ~2 min. Subsequent loads are cached for 1 h.")
+    st.caption("First load fits Prophet for all 6 basins — allow ~2 min. Subsequent loads are cached for 1 h.")
 
-    with st.spinner("Fitting forecasts for all 7 basins…"):
+    with st.spinner("Fitting forecasts for all 6 basins…"):
         try:
             cmp = _compare_all_basins(fuel_type, target_year, wti, henry_hub)
         except Exception as exc:
@@ -556,7 +556,7 @@ def render_overview(
                 {"Basin": b["basin"], "Error": b.get("error", "unknown")}
                 for b in errored
             ])
-            st.warning("All 7 basins failed to compute. Details below:", icon=":material/warning:")
+            st.warning("All 6 basins failed to compute. Details below:", icon=":material/warning:")
             st.dataframe(err_df, use_container_width=True, hide_index=True)
         else:
             st.info("No basin data available yet.")
@@ -612,7 +612,7 @@ def render_overview(
 
     with col_rev:
         st.markdown("##### Revenue Potential by Basin")
-        st.caption(f"Gross value at {_md_price(fuel_type, wti, henry_hub)}, before royalties, taxes and costs (\\$M/year). State totals, so overlapping basins share volume.")
+        st.caption(f"Gross value at {_md_price(fuel_type, wti, henry_hub)}, before royalties, taxes and costs (\\$M/year).")
         _render_revenue_bar(ranked, basin, wti)
 
     with col_rpi:

@@ -30,10 +30,9 @@ BASIN_COORDS: dict[str, dict[str, float]] = {
     "Permian":     {"lat": 31.5,  "lon": -103.0},
     "Bakken":      {"lat": 47.8,  "lon": -103.0},
     "Eagle Ford":  {"lat": 28.5,  "lon": -98.0},
-    "Marcellus":   {"lat": 41.0,  "lon": -77.5},
     "Haynesville": {"lat": 32.0,  "lon": -93.5},
     "Anadarko":    {"lat": 35.5,  "lon": -98.0},
-    "Appalachian": {"lat": 39.5,  "lon": -80.0},
+    "Appalachia":  {"lat": 40.5,  "lon": -79.5},
 }
 
 # One primary state per basin for the choropleth background layer.
@@ -42,21 +41,19 @@ BASIN_PRIMARY_STATE: dict[str, str] = {
     "Permian":     "TX",
     "Bakken":      "ND",
     "Eagle Ford":  "TX",
-    "Marcellus":   "PA",
     "Haynesville": "LA",
     "Anadarko":    "OK",
-    "Appalachian": "WV",
+    "Appalachia":  "PA",
 }
 
 # Secondary states to also shade for context
 BASIN_ALL_STATES: dict[str, list[str]] = {
     "Permian":     ["TX", "NM"],
-    "Bakken":      ["ND"],
+    "Bakken":      ["ND", "MT"],
     "Eagle Ford":  ["TX"],
-    "Marcellus":   ["PA", "WV"],
     "Haynesville": ["LA"],
     "Anadarko":    ["OK"],
-    "Appalachian": ["PA", "WV", "OH"],
+    "Appalachia":  ["PA", "WV", "OH"],
 }
 
 _OVERLAY_LABELS: dict[str, str] = {
@@ -317,7 +314,7 @@ def _render_kpi_panel(
     c3.metric(
         "RPI Score",
         f"{rpi:.1f} / 100" if rpi is not None else "N/A",
-        help="Relative Performance Index vs. all 7 peer basins (0=lowest, 100=highest)",
+        help="Relative Performance Index vs. all 6 peer basins (0=lowest, 100=highest)",
     )
 
     rev = basin_data.get("revenue_potential", {}).get("revenue_usd_millions")

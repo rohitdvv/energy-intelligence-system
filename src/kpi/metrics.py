@@ -200,8 +200,8 @@ def revenue_potential(
     MMBTU_PER_MCF. Gas used to be priced at WTI / 6, which is energy parity
     rather than a market price and overstated gas revenue about 3 to 4 times.
 
-    Gross means before royalties, taxes and costs, for the whole state-level
-    area, so it is a size measure and not investable revenue.
+    Gross means before royalties, taxes and costs, for the whole basin, so it
+    is a size measure and not investable revenue.
 
     Returns value in USD millions.
     """

@@ -15,7 +15,7 @@ import anthropic
 import streamlit as st
 
 from config import check_secrets, get_anthropic_key
-from data.eia import BASIN_STATES, BASINS
+from data.eia import BASIN_SOURCE, BASINS
 from data.loader import load_production
 from kpi.metrics import DEFAULT_HENRY_HUB, DEFAULT_WTI
 from ui.access import require_access
@@ -33,7 +33,7 @@ _ASSETS = Path(__file__).resolve().parent / "assets"
 
 def _basin_label(basin: str) -> str:
     """Basin name plus the states its figures actually add up."""
-    return f"{basin} · {BASIN_STATES.get(basin, '?')} state data"
+    return f"{basin} · {BASIN_SOURCE.get(basin, '?')}"
 
 
 _FILTER_DEFAULTS: dict[str, object] = {
@@ -87,8 +87,9 @@ def _filter_bar() -> None:
         )
         c_basin.selectbox(
             "Basin", BASINS, key="basin", format_func=_basin_label,
-            help="EIA reports production by state, so each basin is the sum of whole states. "
-            "Eagle Ford is all of Texas and Permian is Texas plus New Mexico, so they overlap.",
+            help="Basins are EIA's regional estimates, built from the counties over each play, so "
+            "they do not overlap. Appalachia covers the Marcellus and Utica. Anadarko is the "
+            "Oklahoma state total, because EIA publishes no Anadarko region.",
         )
         c_fuel.radio(
             "Fuel", ["oil", "gas"], key="fuel_type", horizontal=True, format_func=str.title
@@ -134,7 +135,7 @@ def _overview_page() -> None:
 
 def _eyebrow() -> str:
     basin, fuel_type, target_year, _ = _context()
-    return f"{basin} ({BASIN_STATES.get(basin, '?')} state data) · {fuel_type.title()} · {target_year}"
+    return f"{basin} ({BASIN_SOURCE.get(basin, '?')}) · {fuel_type.title()} · {target_year}"
 
 
 def _forecast_page() -> None:
@@ -233,7 +234,7 @@ def main() -> None:
     st.divider()
     st.caption(
         "Sources: EIA Open Data, FRED, USGS National Oil & Gas Assessment, BSEE. "
-        "Basin figures add up state-level EIA data, so basins that share a state overlap. "
+        "Basin figures are EIA regional estimates (Anadarko is the Oklahoma state total). "
         "For research only, not investment advice."
     )
 

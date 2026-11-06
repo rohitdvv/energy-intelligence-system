@@ -220,8 +220,7 @@ class Committee:
             f"Target year: {target_year}  |  Price assumption: {price} "
             f"(pass wti_assumption={wti_assumption} and "
             f"henry_hub_assumption={henry_hub_assumption} to KPI tools)\n\n"
-            f"Basin figures are state totals ({basin_scope(basin)}), not basin-only volumes; "
-            "say so when you cite them.\n\n"
+            f"Data scope: {basin_scope(basin)}.\n\n"
             "Use your available tools to pull live data before writing your thesis. "
             "Do not speculate on numbers you have not retrieved from a tool."
         )

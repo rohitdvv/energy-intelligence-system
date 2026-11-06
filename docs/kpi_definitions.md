@@ -89,7 +89,7 @@ UI displays annualised: `$M/mo × 12 = $M/yr`
 
 Highest-producing basin = 100, lowest = 0. Relative ranking only — not an absolute quality score.
 
-It re-expresses size only: the largest basin is always 100, and Permian must outscore Eagle Ford because Permian's figure contains all of Texas.
+It re-expresses size only: the largest basin is always 100 and the smallest 0.
 
 **Answers:** "Where does this basin rank in the peer set this year?"
 
@@ -131,7 +131,9 @@ Not modelled: secondary-product revenue (gas and NGL for oil wells, condensate f
 | Henry Hub price | User assumption (default $3.50) | N/A | $/MMBtu |
 | Well inputs | User-entered / basin defaults | N/A | Various |
 
-**Texas proxy limitation:** EIA duoarea `STX` covers all Texas production. Permian and Eagle Ford both map to Texas-level aggregates — not true basin-specific volumes. The app now labels every basin with the states behind it (`BASIN_STATES` in `src/data/eia.py`). On 2025 oil, the six basin rows sum to about 60% more than the distinct states behind them.
+**Basin data:** basins are EIA's regional production estimates from the Short-Term Energy Outlook (`steo` route, series `COPR<code>` for crude oil in million b/d and `NGMP<code>` for marketed gas in Bcf/d; codes PM, BK, EF, HA, AP). EIA builds each region from the counties over the play, so regions do not overlap. Rates are converted to monthly volumes (`rate × 1,000 × days in month`), and months after the latest month of EIA's reported U.S. production are dropped because STEO also carries EIA's forecast. Appalachia covers the Marcellus and Utica. Anadarko has no STEO region, so it is still the Oklahoma state total and is labelled "OK state data" everywhere.
+
+Until November 2026 basins were sums of whole states: Eagle Ford was all of Texas and Permian was Texas plus New Mexico, which overstated the six rows by about 60% on 2025 oil.
 
 ---
 

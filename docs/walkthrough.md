@@ -47,7 +47,7 @@
 
 ## Key Numbers to Highlight
 
-- **7 basins** × 2 fuel types × 20+ years of data = 2,800+ monthly data points
+- **6 basins** (5 EIA regions plus Oklahoma for Anadarko) × 2 fuel types × 15 years of monthly data
 - **5 AI tools** called per agent turn, grounding every claim in live data
 - **3 AI agents** debate every investment thesis before a verdict is issued
 - **80% CI** on every forecast — explicit uncertainty quantification

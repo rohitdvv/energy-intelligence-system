@@ -49,7 +49,7 @@ ENERGY_EVENT_CALENDAR: dict[str, str] = {
     "2023-04": "OPEC+ surprise production cut",
 }
 
-_BASIN_ENUM = BASINS  # ["Permian", "Bakken", ..., "Appalachian"]
+_BASIN_ENUM = BASINS  # ["Permian", "Bakken", ..., "Anadarko"]
 
 
 # ------------------------------------------------------------------
@@ -187,7 +187,7 @@ def _exec_forecast_basin(inp: dict[str, Any]) -> dict[str, Any]:
         "interval_method": "calibrated from rolling-backtest errors of this series",
         "backtest_vs_flat_baseline": verdict,
         "historical_cagr_pct": cagr,
-        "data_scope": f"{basin_scope(basin)}, not basin-only volumes",
+        "data_scope": basin_scope(basin),
     }
 
 
@@ -469,7 +469,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
     {
         "name": "compare_basins",
         "description": (
-            "Run KPI snapshots for all 7 basins and return them ranked by projected "
+            "Run KPI snapshots for all 6 basins and return them ranked by projected "
             "production, with 0–100 relative performance index scores. Use to "
             "contextualise one basin against its peers."
         ),

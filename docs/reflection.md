@@ -30,7 +30,7 @@
 ## What Would Be Done Differently
 
 **1. True basin-level production data**
-The biggest data quality issue: EIA duoarea `STX` is all of Texas, so Permian and Eagle Ford show the same numbers. Fix: integrate Texas RRC API or Enverus basin-level datasets for proper disaggregation. This is the single highest-impact improvement.
+The biggest data quality issue was that EIA duoarea `STX` is all of Texas, so Permian and Eagle Ford showed the same numbers. Fixed in November 2026 by switching to EIA's STEO regional estimates; Anadarko is still a state total because EIA publishes no region for it.
 
 **2. XGBoost as residual corrector, not standalone**
 The XGBoost model was built as an independent forecaster which caused long-horizon drift (900%+ YoY values). Better design: XGBoost models Prophet residuals. Prophet captures global trend + seasonality; XGBoost corrects local regime-specific patterns in the residuals. This ensemble would be more stable and more accurate.

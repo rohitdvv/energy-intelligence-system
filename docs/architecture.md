@@ -176,7 +176,7 @@ src/
 ```
 load_production_no_cache(fuel_type, live_fetch=True)
   → try data/raw/{fuel_type}_production.parquet
-  → miss → EIAClient.fetch_*_production_by_basin() for all 7 basins
+  → miss → EIAClient.fetch_*_production_by_basin() for all 6 basins
   → drop partial month (< 50% of 6-month avg)
   → save Parquet → return DataFrame
 ```
@@ -223,7 +223,7 @@ User prompt → Claude API (tools=TOOL_SPECS)
 | `get_production_history` | Latest month, 12m avg, YoY, trend |
 | `forecast_basin` | Prophet yhat, annual total, 80% CI, CAGR |
 | `get_kpi_snapshot` | Full KPI suite |
-| `compare_basins` | All 7 basins ranked + RPI |
+| `compare_basins` | All 6 basins ranked + RPI |
 | `investigate_anomalies` | Z-score anomalies + event calendar |
 
 ---

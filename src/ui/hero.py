@@ -16,7 +16,7 @@ from html import escape
 
 import streamlit as st
 
-from data.eia import basin_scope
+from data.eia import BASIN_SOURCE
 
 _SEISMIC = " ".join(
     f"{x},{236 + (7 if (x // 12) % 2 else -9) * (1 if (x // 48) % 3 else 0.35):.1f}"
@@ -158,7 +158,7 @@ def render_hero(
         chips.append(f'<span class="eis-chip {trend}">Year over year <b>{yoy_pct:+.1f}%</b></span>')
     if data_through:
         chips.append(f'<span class="eis-chip">EIA data through <b>{escape(data_through)}</b></span>')
-    chips.append(f'<span class="eis-chip">Figures are <b>{escape(basin_scope(basin))}</b></span>')
+    chips.append(f'<span class="eis-chip">Source <b>{escape(BASIN_SOURCE.get(basin, "EIA"))}</b></span>')
 
     st.html(
         _CSS

@@ -11,7 +11,7 @@ Assessment reports referenced
 Permian (2018)  : USGS Fact Sheet 2018-3101
 Bakken  (2013)  : USGS Fact Sheet 2013-3013
 Niobrara(2016)  : USGS Fact Sheet 2016-3032
-Marcellus(2019) : USGS Open-File Report 2019-1075
+Appalachia (2019): USGS Open-File Report 2019-1075 (Marcellus and Utica)
 Haynesville(2019): USGS Scientific Investigations Report 2019-5094
 Anadarko(2015)  : USGS Digital Data Series DDS-069-EE
 Eagle Ford(2020): USGS Open-File Report 2020-1104
@@ -54,7 +54,7 @@ USGS_ASSESSMENTS: dict[str, dict] = {
         "report":           "USGS OFR 2020-1104",
         "notes":            "Eagle Ford Group, onshore Texas",
     },
-    "Marcellus": {
+    "Appalachia": {
         "oil_bbo":          0.0,
         "gas_tcfg":         97.0,
         "ngl_bbo":           4.0,

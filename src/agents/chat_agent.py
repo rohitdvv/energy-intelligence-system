@@ -37,7 +37,7 @@ AVAILABLE TOOLS:
 - get_production_history  : latest monthly stats for a basin (trend, YoY, averages)
 - forecast_basin          : Prophet forecast through a target year + 80% CI
 - get_kpi_snapshot        : full KPI suite (growth, decline, volatility, revenue)
-- compare_basins          : rank all 7 basins by projected production with RPI scores
+- compare_basins          : rank all 6 basins by projected production with RPI scores
 - investigate_anomalies   : detect anomalous production months with event context
 
 RESPONSE STYLE:
@@ -46,7 +46,8 @@ RESPONSE STYLE:
 - For comparisons, use a sorted list with the key metric shown
 - Keep responses concise and decision-relevant (under 300 words)
 
-BASINS AVAILABLE: Permian, Bakken, Eagle Ford, Marcellus, Haynesville, Anadarko, Appalachian
+BASINS AVAILABLE: Permian, Bakken, Eagle Ford, Haynesville, Appalachia, Anadarko
+DATA SCOPE: the first five are EIA region estimates built from the counties over each play, so they do not overlap. Appalachia covers the Marcellus and Utica. Anadarko is the Oklahoma state total, because EIA publishes no Anadarko region; say so when you cite it.
 """
 
 

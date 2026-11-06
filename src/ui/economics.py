@@ -27,20 +27,18 @@ OIL_DEFAULTS: dict[str, dict[str, Any]] = {
     "Permian":     {"ip": 700, "de_pct": 70, "b": 1.3, "dc_cost": 9.5},
     "Bakken":      {"ip": 550, "de_pct": 65, "b": 1.2, "dc_cost": 10.0},
     "Eagle Ford":  {"ip": 500, "de_pct": 72, "b": 1.2, "dc_cost": 8.5},
-    "Marcellus":   {"ip": 400, "de_pct": 60, "b": 1.1, "dc_cost": 7.0},
     "Haynesville": {"ip": 350, "de_pct": 65, "b": 1.0, "dc_cost": 8.0},
     "Anadarko":    {"ip": 300, "de_pct": 60, "b": 1.1, "dc_cost": 7.5},
-    "Appalachian": {"ip": 350, "de_pct": 55, "b": 1.0, "dc_cost": 6.5},
+    "Appalachia":  {"ip": 350, "de_pct": 55, "b": 1.0, "dc_cost": 6.5},
 }
 
 GAS_DEFAULTS: dict[str, dict[str, Any]] = {
     "Permian":     {"ip": 2_000,  "de_pct": 70, "b": 1.2, "dc_cost": 9.5},
     "Bakken":      {"ip": 1_000,  "de_pct": 65, "b": 1.1, "dc_cost": 10.0},
     "Eagle Ford":  {"ip": 3_000,  "de_pct": 70, "b": 1.1, "dc_cost": 8.5},
-    "Marcellus":   {"ip": 12_000, "de_pct": 60, "b": 1.0, "dc_cost": 9.0},
     "Haynesville": {"ip": 20_000, "de_pct": 75, "b": 0.9, "dc_cost": 14.0},
     "Anadarko":    {"ip": 4_000,  "de_pct": 65, "b": 1.0, "dc_cost": 8.0},
-    "Appalachian": {"ip": 10_000, "de_pct": 60, "b": 1.0, "dc_cost": 8.5},
+    "Appalachia":  {"ip": 12_000, "de_pct": 60, "b": 1.0, "dc_cost": 9.0},
 }
 
 # Basins where wells are drilled mainly for oil, so a gas-only case is a stretch.

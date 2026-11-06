@@ -30,6 +30,15 @@ _EMPTY = pd.DataFrame(columns=["ds", "y", "basin", "fuel_type"]).astype(
 # Core (no-cache) implementations
 # ------------------------------------------------------------------
 
+# Bump when the meaning of the cached production files changes, so a host that
+# still has old files on disk fetches fresh ones (v2: EIA STEO regions).
+PRODUCTION_CACHE_VERSION = "v2"
+
+
+def production_path(fuel_type: str, basin: str) -> Path:
+    return _RAW_DIR / f"eia_{fuel_type}_{_basin_slug(basin)}_{PRODUCTION_CACHE_VERSION}.parquet"
+
+
 def _basin_slug(name: str) -> str:
     return name.lower().replace(" ", "_")
 
@@ -72,7 +81,7 @@ def load_production_no_cache(
     """
     existing = sum(
         1 for b in BASINS
-        if (_RAW_DIR / f"eia_{fuel_type}_{_basin_slug(b)}.parquet").exists()
+        if (production_path(fuel_type, b)).exists()
     )
     logger.info(
         "load_production_no_cache called: fuel_type=%s live_fetch=%s parquet_on_disk=%d/%d",
@@ -83,8 +92,7 @@ def load_production_no_cache(
     eia: EIAClient | None = None
 
     for basin in BASINS:
-        slug = _basin_slug(basin)
-        path = _RAW_DIR / f"eia_{fuel_type}_{slug}.parquet"
+        path = production_path(fuel_type, basin)
         df = _read_parquet(path)
 
         if df is None and live_fetch:

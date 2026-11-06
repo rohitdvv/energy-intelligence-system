@@ -203,3 +203,70 @@ def test_economics_page_renders(basin, fuel):
     assert "IRR" in labels and any(lbl.startswith("Breakeven @") for lbl in labels)
     if fuel == "gas":
         assert any("$/Mcf" in n.label for n in app.number_input)
+
+
+# ---------------------------------------------------------------------------
+# Basin data: EIA STEO regions
+# ---------------------------------------------------------------------------
+
+def test_steo_rates_become_monthly_volumes_and_forecast_months_are_dropped():
+    from data.eia import steo_rows_to_monthly
+
+    rows = [
+        {"period": "2026-02", "value": "6.5"},   # million b/d, 28 days
+        {"period": "2026-03", "value": 6.6},
+        {"period": "2026-09", "value": 6.9},     # after the last reported month
+    ]
+    df = steo_rows_to_monthly(rows, pd.Timestamp("2026-08-01"))
+    assert df["ds"].dt.strftime("%Y-%m").tolist() == ["2026-02", "2026-03"]
+    assert df["y"].tolist() == pytest.approx([6.5 * 1_000 * 28, 6.6 * 1_000 * 31])
+
+
+@pytest.mark.parametrize("fuel,series", [("oil", "COPRPM"), ("gas", "NGMPPM")])
+def test_region_basins_read_their_steo_series(fuel, series):
+    from unittest import mock
+
+    from data import eia
+
+    client = eia.EIAClient()
+    calls = []
+
+    def fake_get(route, params):
+        calls.append((route, dict(params)))
+        if route == "steo/data":
+            return {"response": {"data": [{"period": "2026-01", "value": 6.0},
+                                          {"period": "2026-12", "value": 7.0}]}}
+        return {"response": {"data": [{"period": "2026-08"}]}}
+
+    with mock.patch.object(client, "_get", side_effect=fake_get):
+        fetch = client.fetch_oil_production_by_basin if fuel == "oil" else client.fetch_gas_production_by_basin
+        df = fetch("Permian")
+    steo = [p for r, p in calls if r == "steo/data"]
+    assert steo and steo[0]["facets[seriesId][]"] == series
+    assert df["ds"].max() == pd.Timestamp("2026-01-01")  # 2026-12 is forecast
+    assert set(df["basin"]) == {"Permian"} and set(df["fuel_type"]) == {fuel}
+
+
+def test_regions_do_not_share_series_and_anadarko_is_labelled_as_state_data():
+    from data.eia import BASIN_SOURCE, BASINS, STEO_REGIONS, basin_scope, is_state_proxy
+
+    assert len(set(STEO_REGIONS.values())) == len(STEO_REGIONS)
+    assert set(BASINS) == set(STEO_REGIONS) | {"Anadarko"}
+    assert is_state_proxy("Anadarko") and "Oklahoma" in basin_scope("Anadarko")
+    assert BASIN_SOURCE["Anadarko"] == "OK state data"
+    assert all(BASIN_SOURCE[b] == "EIA region" for b in STEO_REGIONS)
+
+
+def test_every_basin_has_map_and_economics_entries():
+    from data.eia import BASINS
+    from ui.economics import GAS_DEFAULTS, OIL_DEFAULTS
+    from ui.map import BASIN_ALL_STATES, BASIN_COORDS, BASIN_PRIMARY_STATE
+
+    for table in (OIL_DEFAULTS, GAS_DEFAULTS, BASIN_COORDS, BASIN_PRIMARY_STATE, BASIN_ALL_STATES):
+        assert set(BASINS) <= set(table)
+
+
+def test_old_state_proxy_cache_files_are_not_reused():
+    from data.loader import production_path
+
+    assert production_path("oil", "Permian").name == "eia_oil_permian_v2.parquet"
