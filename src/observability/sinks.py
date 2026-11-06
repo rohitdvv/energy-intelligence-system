@@ -181,13 +181,32 @@ class DuckDBSink:
 # ----------------------------------------------------------------------
 
 class LoggingSink:
-    """Emit each event as a single JSON log line."""
+    """Emit each event as a single JSON line on stderr.
+
+    The ``observability.events`` logger gets its own handler, because nothing
+    else configures logging and Python's default drops INFO lines, which is
+    why this sink used to print nothing. On Streamlit Cloud the lines appear
+    under Manage app → Logs. Set ``OBS_LOG_EVENTS=off`` to turn them off.
+    """
 
     def __init__(self, level: int = logging.INFO) -> None:
         self._log = logging.getLogger("observability.events")
         self._level = level
+        setting = os.environ.get("OBS_LOG_EVENTS", "on").strip().lower()
+        self.enabled = setting not in {"off", "none", "0", "false", "no"}
+        if self.enabled and not any(
+            getattr(h, "_eis_events", False) for h in self._log.handlers
+        ):
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter("%(message)s"))
+            handler._eis_events = True  # type: ignore[attr-defined]
+            self._log.addHandler(handler)
+            self._log.setLevel(logging.INFO)
+            self._log.propagate = False
 
     def emit(self, event: "Event") -> None:
+        if not self.enabled:
+            return
         try:
             self._log.log(self._level, event.to_json())
         except Exception as exc:  # noqa: BLE001

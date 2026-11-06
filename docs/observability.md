@@ -32,6 +32,19 @@ and estimated USD spend.
 - **Low churn.** Call sites are instrumented with a decorator, a context
   manager, or a one-liner.
 
+## What counts as a failure
+
+- An exception inside a `span` (the call failed).
+- A handled failure marked with `mark_failed(sp, message)`: a tool that returns
+  `{"error": ...}`, `compare_basins` when any basin has no result, and BSEE
+  when it serves static figures because the live API failed. These used to be
+  recorded as successes.
+- Every failed Claude attempt. Committee and AI Analyst calls both go through
+  `agents/llm_call.py`, which retries 429, 5xx (including 529 overloaded),
+  timeouts and dropped connections up to 4 attempts with 2/4/8 s backoff and
+  records each attempt with its agent and retry count. The Anthropic client is
+  created with `max_retries=0`, so the SDK does not retry silently on top.
+
 ## Access and secrets
 
 The Observatory shows activity from every viewer, so it stays locked until
@@ -49,6 +62,7 @@ code that records exception text should use `observability.redact`.
 | `OBS_DUCKDB_PATH` | Persist events to this DuckDB file (or `:memory:`). Unset → in-memory only. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Also export spans to an OTLP collector (needs `opentelemetry` extras). |
 | `ANTHROPIC_PRICES` | JSON override for the token→USD price table. |
+| `OBS_LOG_EVENTS` | `off` stops the one-JSON-line-per-event log on stderr (on by default; on Streamlit Cloud it shows under Manage app → Logs). |
 
 On Streamlit Cloud, set these under **App → Settings → Secrets / environment**.
 Its filesystem is ephemeral, so a `OBS_DUCKDB_PATH` file persists across the

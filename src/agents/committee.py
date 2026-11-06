@@ -25,15 +25,13 @@ from typing import Any
 import anthropic
 
 from agents.prompts import BEAR_SYSTEM_PROMPT, BULL_SYSTEM_PROMPT, PM_SYSTEM_PROMPT
+from agents.llm_call import create_with_retry
 from agents.tools import TOOL_SPECS, execute_tool
 from data.eia import basin_scope
 from kpi.metrics import DEFAULT_HENRY_HUB, price_assumption_text
-from observability import record_llm, span
+from observability import span
 
 logger = logging.getLogger(__name__)
-
-_MAX_RETRIES = 4
-_BACKOFF_BASE = 2  # seconds
 
 
 class Committee:
@@ -66,11 +64,7 @@ class Committee:
         tools: list[dict[str, Any]] | None = None,
         agent: str | None = None,
     ) -> Any:
-        """Call messages.create with exponential-backoff on rate limits / 5xx.
-
-        Each API call is timed and reported to the telemetry layer with token
-        usage, $ cost, and the number of retries that preceded success/failure.
-        """
+        """Call messages.create with retries; see agents.llm_call."""
         kwargs: dict[str, Any] = {
             "model": self.model,
             "max_tokens": 800,
@@ -80,44 +74,7 @@ class Committee:
         if tools:
             kwargs["tools"] = tools
 
-        last_exc: Exception = RuntimeError("no attempts made")
-        for attempt in range(1, _MAX_RETRIES + 1):
-            call_start = time.time()
-            try:
-                response = self._client.messages.create(**kwargs)
-                record_llm(
-                    self.model,
-                    response,
-                    duration_ms=(time.time() - call_start) * 1000,
-                    agent=agent,
-                    retries=attempt - 1,
-                )
-                return response
-            except anthropic.RateLimitError as exc:
-                last_exc = exc
-                record_llm(
-                    self.model, None, duration_ms=(time.time() - call_start) * 1000,
-                    agent=agent, retries=attempt - 1, success=False,
-                    error=f"RateLimitError: {exc}",
-                )
-                if attempt == _MAX_RETRIES:
-                    break
-                wait = _BACKOFF_BASE ** attempt
-                logger.warning("Rate limited — retrying in %ds (attempt %d/%d)", wait, attempt, _MAX_RETRIES)
-                time.sleep(wait)
-            except anthropic.APIStatusError as exc:
-                last_exc = exc
-                record_llm(
-                    self.model, None, duration_ms=(time.time() - call_start) * 1000,
-                    agent=agent, retries=attempt - 1, success=False,
-                    error=f"APIStatusError {exc.status_code}: {exc}",
-                )
-                if attempt == _MAX_RETRIES or exc.status_code < 500:
-                    break
-                wait = _BACKOFF_BASE ** attempt
-                logger.warning("API %d error — retrying in %ds", exc.status_code, wait)
-                time.sleep(wait)
-        raise last_exc
+        return create_with_retry(self._client, agent=agent, **kwargs)
 
     # ------------------------------------------------------------------
     # Tool-use loop

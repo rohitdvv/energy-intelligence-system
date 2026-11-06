@@ -8,13 +8,12 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from typing import Any
 
 import anthropic
 
 from agents.tools import TOOL_SPECS, execute_tool
-from observability import record_llm
+from agents.llm_call import create_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -103,19 +102,14 @@ class ChatAgent:
         tool_calls_log: list[dict[str, Any]] = []
 
         for _ in range(max_turns):
-            call_start = time.time()
-            response = self._client.messages.create(
+            response = create_with_retry(
+                self._client,
+                agent="chat",
                 model=self.model,
                 max_tokens=1200,
                 system=system,
                 messages=conversation,
                 tools=TOOL_SPECS,
-            )
-            record_llm(
-                self.model,
-                response,
-                duration_ms=(time.time() - call_start) * 1000,
-                agent="chat",
             )
             conversation.append({"role": "assistant", "content": response.content})
 

@@ -160,6 +160,19 @@ def get_telemetry() -> Telemetry:
 # Instrumentation helpers
 # ----------------------------------------------------------------------
 
+_FAILED_KEY = "__failed__"
+
+
+def mark_failed(span_attrs: dict[str, Any], message: str) -> None:
+    """Record a span as failed without raising.
+
+    For code that handles an error itself, such as a tool that returns
+    ``{"error": ...}`` or a loader that falls back to static data, so the
+    Observatory still counts it as an error.
+    """
+    span_attrs[_FAILED_KEY] = message
+
+
 @contextmanager
 def span(category: str, name: str, **attributes: Any) -> Iterator[dict[str, Any]]:
     """Time a block and record an Event on exit.
@@ -182,6 +195,10 @@ def span(category: str, name: str, **attributes: Any) -> Iterator[dict[str, Any]
         error = f"{type(exc).__name__}: {exc}"
         raise
     finally:
+        failed = attrs.pop(_FAILED_KEY, None)
+        if failed is not None and success:
+            success = False
+            error = str(failed)
         get_telemetry().record(
             Event(
                 ts=start,

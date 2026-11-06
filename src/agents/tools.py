@@ -27,7 +27,7 @@ from kpi.metrics import (
 )
 from models.calibration import annual_band, baseline_verdict, run_backtest
 from models.forecaster import forecast_basin as _fit_and_forecast
-from observability import span
+from observability import mark_failed, span
 
 logger = logging.getLogger(__name__)
 
@@ -267,6 +267,7 @@ def _exec_compare_basins(inp: dict[str, Any]) -> dict[str, Any]:
         "wti_assumption_per_bbl": wti,
         "henry_hub_assumption_per_mmbtu": henry_hub,
         "ranked_basins": summaries,
+        "failed_basins": [s["basin"] for s in summaries if "error" in s],
     }
 
 
@@ -570,7 +571,13 @@ def execute_tool(name: str, input_dict: dict[str, Any]) -> dict[str, Any]:
         with span("tool", name, basin=input_dict.get("basin")) as sp:
             result = executor(input_dict)
             sp["result_keys"] = len(result) if isinstance(result, dict) else 0
-            sp["tool_error"] = bool(isinstance(result, dict) and "error" in result)
+            tool_error = isinstance(result, dict) and "error" in result
+            partial = result.get("failed_basins") if isinstance(result, dict) else None
+            sp["tool_error"] = tool_error or bool(partial)
+            if tool_error:
+                mark_failed(sp, str(result["error"]))
+            elif partial:
+                mark_failed(sp, f"no result for {', '.join(partial)}")
             return result
     except Exception as exc:
         logger.warning("Tool '%s' raised: %s", name, exc, exc_info=True)

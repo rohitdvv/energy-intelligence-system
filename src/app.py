@@ -52,7 +52,9 @@ _FILTER_DEFAULTS: dict[str, object] = {
 @st.cache_resource
 def _anthropic_client() -> anthropic.Anthropic:
     """Single Anthropic client reused across all agent calls."""
-    return anthropic.Anthropic(api_key=get_anthropic_key())
+    # Retries are done in agents.llm_call so every attempt reaches telemetry;
+    # the SDK's own silent retries would multiply them.
+    return anthropic.Anthropic(api_key=get_anthropic_key(), max_retries=0)
 
 
 def _init_filter_state() -> None:

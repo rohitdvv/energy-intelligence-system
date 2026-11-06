@@ -29,7 +29,7 @@ from functools import lru_cache
 
 import pandas as pd
 
-from observability import span
+from observability import mark_failed, span
 
 logger = logging.getLogger(__name__)
 
@@ -109,10 +109,12 @@ def fetch_gom_production(year: int | None = None) -> dict:
                 }
             sp["result_source"] = "bsee_static"
             sp["fallback"] = "empty_response"
+            mark_failed(sp, "BSEE returned no records; served static figures")
         except Exception as exc:
             logger.warning("BSEE API unavailable (%s) — using static fallback", exc)
             sp["result_source"] = "bsee_static"
             sp["fallback"] = f"{type(exc).__name__}"
+            mark_failed(sp, f"BSEE unavailable ({type(exc).__name__}); served static figures")
 
     # Static fallback
     rec = _BSEE_STATIC.get(target_year, _BSEE_STATIC[max(_BSEE_STATIC.keys())])
